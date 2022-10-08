@@ -68,12 +68,14 @@ jobs:
           meson compile -C build  
       
       - name: Package
-        run: tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
+        run: |
+          tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
+          mv /tmp/runner.tar.gz /tmp/android-${{ matrix.arch }}
       - name: Upload to release
         uses: ncipollo/release-action@v1
         with:
-          name: android-${{ matrix.arch }}
-          artifacts: /tmp/runner.tar.gz
+          name: frida-gum
+          artifacts: /tmp/android-${{ matrix.arch }}
           allowUpdates: true
           tag: android-${{ matrix.arch }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -107,12 +109,14 @@ jobs:
             build
           meson compile -C build
       - name: Package
-        run: tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
+        run: |
+          tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
+          mv /tmp/runner.tar.gz /tmp/android-${{ matrix.arch }}
       - name: Upload to release
         uses: ncipollo/release-action@v1
         with:
-          name: android-${{ matrix.arch }}
-          artifacts: /tmp/runner.tar.gz
+          name: frida-gum
+          artifacts: /tmp/android-${{ matrix.arch }}
           allowUpdates: true
           tag: android-${{ matrix.arch }}
           token: ${{ secrets.GITHUB_TOKEN }}
