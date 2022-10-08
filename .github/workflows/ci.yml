@@ -34,7 +34,7 @@ jobs:
           meson setup \
             -Doptimization=s \
             -Dgumpp=enabled \
-            -Dgumjs=enabled \
+            -Dgumjs=disabled \
             build
           meson compile -C build
 
@@ -62,22 +62,22 @@ jobs:
             -Doptimization=s \
             -Dwerror=true \
             -Dgumpp=enabled \
-            -Dgumjs=enabled \
-            -Dtests=enabled \
+            -Dgumjs=disabled \
+            -Dtests=disabled \
             build
           meson compile -C build  
       
       - name: Package
         run: |
           tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
-          mv /tmp/runner.tar.gz /tmp/android-${{ matrix.arch }}
+          mv /tmp/runner.tar.gz /tmp/android-${{ matrix.arch }}.gz
       - name: Upload to release
         uses: ncipollo/release-action@v1
         with:
           name: frida-gum
-          artifacts: /tmp/android-${{ matrix.arch }}
+          artifacts: /tmp/android-${{ matrix.arch }}.gz
           allowUpdates: true
-          tag: android-${{ matrix.arch }}
+          tag: frida-gum
           token: ${{ secrets.GITHUB_TOKEN }}
 
 
@@ -104,21 +104,21 @@ jobs:
             -Doptimization=s \
             -Dwerror=true \
             -Dgumpp=enabled \
-            -Dgumjs=enabled \
-            -Dtests=enabled \
+            -Dgumjs=disabled \
+            -Dtests=disabled \
             build
           meson compile -C build
       - name: Package
         run: |
           tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
-          mv /tmp/runner.tar.gz /tmp/android-${{ matrix.arch }}
+          mv /tmp/runner.tar.gz /tmp/android-${{ matrix.arch }}.gz
       - name: Upload to release
         uses: ncipollo/release-action@v1
         with:
           name: frida-gum
-          artifacts: /tmp/android-${{ matrix.arch }}
+          artifacts: /tmp/android-${{ matrix.arch }}.gz
           allowUpdates: true
-          tag: android-${{ matrix.arch }}
+          tag: frida-gum
           token: ${{ secrets.GITHUB_TOKEN }}
 
 
