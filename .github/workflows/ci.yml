@@ -75,22 +75,9 @@ jobs:
           name: android-${{ matrix.arch }}
           artifacts: /tmp/runner.tar.gz
           allowUpdates: true
-          tag: R${{ env.DATE }}
+          tag: android-${{ matrix.arch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Delete workflow runs
-        uses: GitRML/delete-workflow-runs@main
-        with:
-          retain_days: 1
-          keep_minimum_runs: 2
-
-      - name: Remove old releases
-        uses: dev-drprasad/delete-older-releases@v0.2.0
-        with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   android-arm:
     runs-on: ubuntu-latest
@@ -127,19 +114,7 @@ jobs:
           name: android-${{ matrix.arch }}
           artifacts: /tmp/runner.tar.gz
           allowUpdates: true
-          tag: R${{ env.DATE }}
+          tag: android-${{ matrix.arch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Delete workflow runs
-        uses: GitRML/delete-workflow-runs@main
-        with:
-          retain_days: 1
-          keep_minimum_runs: 2
 
-      - name: Remove old releases
-        uses: dev-drprasad/delete-older-releases@v0.2.0
-        with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
