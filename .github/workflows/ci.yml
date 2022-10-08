@@ -63,7 +63,7 @@ jobs:
             -Dwerror=true \
             -Dgumpp=enabled \
             -Dgumjs=disabled \
-            -Dtests=disabled \
+            -Dtests=enabled \
             build
           meson compile -C build  
       
@@ -105,7 +105,7 @@ jobs:
             -Dwerror=true \
             -Dgumpp=enabled \
             -Dgumjs=disabled \
-            -Dtests=disabled \
+            -Dtests=enabled \
             build
           meson compile -C build
       - name: Package
