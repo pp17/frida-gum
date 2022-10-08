@@ -67,9 +67,8 @@ jobs:
             build
           meson compile -C build  
       
-      - name: Test
-        run: |
-          gtar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
+      - name: Package
+        run: tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
       - name: Upload to release
         uses: ncipollo/release-action@v1
         with:
@@ -122,9 +121,6 @@ jobs:
           meson compile -C build
       - name: Package
         run: tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
-      - name: Test
-        run: |
-          gtar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
       - name: Upload to release
         uses: ncipollo/release-action@v1
         with:
