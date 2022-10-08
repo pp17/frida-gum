@@ -65,37 +65,33 @@ jobs:
             -Dgumjs=enabled \
             -Dtests=enabled \
             build
-          meson compile -C build
-      - name: AVD cache
-        uses: actions/cache@v2
-        id: avd-cache
-        with:
-          path: |
-            ~/.android/avd/*
-            ~/.android/adb*
-          key: avd-${{ matrix.arch }}
-      - name: Create AVD and generate snapshot for caching
-        if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          arch: ${{ matrix.arch }}
-          api-level: 27
-          force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          disable-animations: false
-          script: echo "Generated AVD snapshot for caching."
+          meson compile -C build  
+      
       - name: Test
-        uses: reactivecircus/android-emulator-runner@v2
+        run: |
+          gtar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
+      - name: Upload to release
+        uses: ncipollo/release-action@v1
         with:
-          arch: ${{ matrix.arch }}
-          api-level: 27
-          force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          disable-animations: true
-          script: |
-            gtar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
-            adb push /tmp/runner.tar.gz /data/local/tmp/
-            adb shell "su root sh -c 'set -ex; cd /data/local/tmp; tar xf runner.tar.gz; TMPDIR=/data/local/tmp ./gum-tests'"
+          name: android-${{ matrix.arch }}
+          artifacts: /tmp/runner.tar.gz
+          allowUpdates: true
+          tag: R${{ env.DATE }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete workflow runs
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 1
+          keep_minimum_runs: 2
+
+      - name: Remove old releases
+        uses: dev-drprasad/delete-older-releases@v0.2.0
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   android-arm:
     runs-on: ubuntu-latest
@@ -127,13 +123,27 @@ jobs:
       - name: Package
         run: tar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
       - name: Test
-        uses: frida/corellium-action@v3
+        run: |
+          gtar -C build/tests -czf /tmp/runner.tar.gz gum-tests data/
+      - name: Upload to release
+        uses: ncipollo/release-action@v1
         with:
+          name: android-${{ matrix.arch }}
+          artifacts: /tmp/runner.tar.gz
+          allowUpdates: true
+          tag: R${{ env.DATE }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          gateway: corellium.frida.re
-          device: android-8.1.0-arm64
-          upload: /tmp/runner.tar.gz
-          run: |
-            cd /data/local/tmp
-            tar xf $ASSET_PATH
-            ./gum-tests
+
+      - name: Delete workflow runs
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 1
+          keep_minimum_runs: 2
+
+      - name: Remove old releases
+        uses: dev-drprasad/delete-older-releases@v0.2.0
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
