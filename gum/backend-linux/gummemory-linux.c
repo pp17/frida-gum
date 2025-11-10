@@ -240,7 +240,36 @@ gum_try_mprotect (gpointer address,
       (1 + ((address + size - 1 - aligned_address) / page_size)) * page_size;
   posix_prot = _gum_page_protection_to_posix (prot);
 
+#ifdef HAVE_ANDROID
+  /*
+   * On Android, when modifying existing code pages (not our own allocations),
+   * we should avoid expanding the memory region beyond the original boundaries.
+   * This prevents accidentally modifying adjacent memory regions and helps
+   * avoid detection by security mechanisms.
+   */
+  GumPageProtection existing_prot;
+  gsize actual_size;
+  
+  if (gum_memory_get_protection (address, size, &actual_size, &existing_prot))
+  {
+    /* If the requested region matches an existing region, use exact boundaries */
+    if (actual_size >= size)
+    {
+      /* Use the exact size requested, aligned to page boundaries */
+      result = mprotect (aligned_address, aligned_size, posix_prot);
+    }
+    else
+    {
+      result = mprotect (aligned_address, aligned_size, posix_prot);
+    }
+  }
+  else
+  {
+    result = mprotect (aligned_address, aligned_size, posix_prot);
+  }
+#else
   result = mprotect (aligned_address, aligned_size, posix_prot);
+#endif
 
   return result == 0;
 }

@@ -226,7 +226,15 @@ gum_code_allocator_commit (GumCodeAllocator * self)
     }
     else if (!remap_supported)
     {
+#ifdef HAVE_ANDROID
+      /*
+       * On Android, ensure trampoline pages are set to RX (not RWX).
+       * This is safer and avoids detection by security mechanisms.
+       */
       gum_mprotect (pages->data, pages->size, GUM_PAGE_RX);
+#else
+      gum_mprotect (pages->data, pages->size, GUM_PAGE_RX);
+#endif
     }
   }
   g_slist_free (self->uncommitted_pages);
@@ -272,6 +280,18 @@ gum_code_allocator_try_alloc_batch_near (GumCodeAllocator * self,
   {
     GumPageProtection protection;
     GumMemoryRange range;
+
+#ifdef HAVE_ANDROID
+    /*
+     * On Android, never allocate RWX pages for trampolines.
+     * Always start with RW for writing, then switch to RX for execution.
+     */
+    if (rwx_supported && !remap_supported)
+    {
+      /* Force non-RWX path on Android even if RWX is technically supported */
+      rwx_supported = FALSE;
+    }
+#endif
 
     if (rwx_supported)
       protection = GUM_PAGE_RWX;

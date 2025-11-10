@@ -494,8 +494,28 @@ cleanup:
   {
     GumPageProtection protection;
     GumSuspendOperation suspend_op = { 0, };
+#ifdef HAVE_ANDROID
+    GumPageProtection * original_prots = NULL;
+#endif
 
     protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
+
+#ifdef HAVE_ANDROID
+    /*
+     * On Android, save original page protections to restore them correctly
+     * instead of blindly setting RX. This is important for security.
+     */
+    original_prots = g_new0 (GumPageProtection, sorted_addresses->len);
+    for (i = 0; i != sorted_addresses->len; i++)
+    {
+      gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+      if (!gum_memory_query_protection (target_page, &original_prots[i]))
+      {
+        /* If we can't query, assume RX as fallback */
+        original_prots[i] = GUM_PAGE_RX;
+      }
+    }
+#endif
 
     if (!rwx_supported)
     {
@@ -514,6 +534,9 @@ cleanup:
       if (!gum_try_mprotect (target_page, page_size, protection))
       {
         result = FALSE;
+#ifdef HAVE_ANDROID
+        g_free (original_prots);
+#endif
         goto resume_threads;
       }
     }
@@ -568,14 +591,45 @@ cleanup:
       for (i = 0; i != sorted_addresses->len; i++)
       {
         gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+        GumPageProtection restore_prot;
 
-        if (!gum_try_mprotect (target_page, page_size, GUM_PAGE_RX))
+#ifdef HAVE_ANDROID
+        /*
+         * On Android, restore original protection instead of forcing RX.
+         * If the original had execute permission, restore it.
+         * If not, just restore the original (likely R or RW).
+         * Never use RWX.
+         */
+        restore_prot = original_prots[i];
+        
+        /* Ensure we have at least read permission */
+        if ((restore_prot & GUM_PAGE_READ) == 0)
+          restore_prot |= GUM_PAGE_READ;
+        
+        /* Never set both write and execute */
+        if ((restore_prot & GUM_PAGE_WRITE) && (restore_prot & GUM_PAGE_EXECUTE))
+        {
+          /* Prefer execute over write for code pages */
+          restore_prot = (restore_prot & ~GUM_PAGE_WRITE);
+        }
+#else
+        restore_prot = GUM_PAGE_RX;
+#endif
+
+        if (!gum_try_mprotect (target_page, page_size, restore_prot))
         {
           result = FALSE;
+#ifdef HAVE_ANDROID
+          g_free (original_prots);
+#endif
           goto resume_threads;
         }
       }
     }
+
+#ifdef HAVE_ANDROID
+    g_free (original_prots);
+#endif
 
     for (i = 0; i != sorted_addresses->len; i++)
     {
