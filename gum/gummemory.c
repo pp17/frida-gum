@@ -247,7 +247,9 @@ G_GNUC_WEAK
 GumRwxSupport
 gum_query_rwx_support (void)
 {
-#if defined (HAVE_DARWIN) && !defined (HAVE_I386)
+#if defined (HAVE_ANDROID)
+  return GUM_RWX_NONE;
+#elif defined (HAVE_DARWIN) && !defined (HAVE_I386)
   return GUM_RWX_NONE;
 #else
   return GUM_RWX_FULL;
@@ -1263,7 +1265,7 @@ gum_ensure_code_readable (gconstpointer address,
   {
     if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
     {
-      if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
+      if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RX))
         g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
     }
   }

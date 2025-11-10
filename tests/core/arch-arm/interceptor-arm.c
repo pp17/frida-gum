@@ -29,8 +29,11 @@ TESTCASE (attach_to_unaligned_function)
   gpointer page, code;
   GumThumbWriter tw;
   gint (* f) (void);
+  gboolean rwx_supported;
+  guint page_size;
 
-  page = gum_alloc_n_pages (1, GUM_PAGE_RWX);
+  rwx_supported = gum_query_is_rwx_supported ();
+  page = gum_alloc_n_pages (1, rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   code = page + 2;
 
   /* Aligned on a 2 byte boundary and minimum 8 bytes long */
@@ -49,6 +52,12 @@ TESTCASE (attach_to_unaligned_function)
   gum_thumb_writer_flush (&tw);
   gum_clear_cache (tw.base, gum_thumb_writer_offset (&tw));
   gum_thumb_writer_clear (&tw);
+
+  if (!rwx_supported)
+  {
+    page_size = gum_query_page_size ();
+    gum_memory_mark_code (page, page_size);
+  }
 
   f = code + 1;
 

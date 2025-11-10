@@ -55,8 +55,11 @@ gum_cycle_sampler_init (GumCycleSampler * self)
 {
   GumX86Writer cw;
   GumX86Reg first_arg_reg;
+  gboolean rwx_supported;
+  guint page_size;
 
-  self->code = gum_alloc_n_pages (1, GUM_PAGE_RWX);
+  rwx_supported = gum_query_is_rwx_supported ();
+  self->code = gum_alloc_n_pages (1, rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   gum_x86_writer_init (&cw, self->code);
   gum_x86_writer_put_lfence (&cw);
   gum_x86_writer_put_rdtsc (&cw);
@@ -66,6 +69,12 @@ gum_cycle_sampler_init (GumCycleSampler * self)
       GUM_X86_EDX);
   gum_x86_writer_put_ret (&cw);
   gum_x86_writer_clear (&cw);
+
+  if (!rwx_supported)
+  {
+    page_size = gum_query_page_size ();
+    gum_memory_mark_code (self->code, page_size);
+  }
 
   self->read_timestamp_counter =
       GUM_POINTER_TO_FUNCPTR (ReadTimestampCounterFunc, self->code);

@@ -1983,7 +1983,7 @@ gum_page_protection_from_v8 (PageAllocator::Permission permission)
     case PageAllocator::kReadWrite:
       return GUM_PAGE_RW;
     case PageAllocator::kReadWriteExecute:
-      return GUM_PAGE_RWX;
+      return gum_query_is_rwx_supported () ? GUM_PAGE_RWX : GUM_PAGE_RW;
     case PageAllocator::kReadExecute:
       return GUM_PAGE_RX;
     default:

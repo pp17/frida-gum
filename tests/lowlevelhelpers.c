@@ -28,6 +28,10 @@
 #endif
 #include <string.h>
 
+static guint8 * gum_test_alloc_code_pages (guint n_pages);
+static guint8 * gum_test_alloc_code_pages_near (guint n_pages,
+    const GumAddressSpec * spec);
+
 typedef struct _GumEmitTestClobberRegsContext GumEmitTestClobberRegsContext;
 typedef struct _GumEmitTestClobberFlagsContext GumEmitTestClobberFlagsContext;
 
@@ -57,6 +61,41 @@ static void gum_emit_test_clobber_flags_function (gpointer mem,
     GumEmitTestClobberFlagsContext * ctx);
 static gpointer allocate_clobber_test_invoker_func (ClobberTestFunc target_func,
     gsize * code_size);
+
+static guint8 *
+gum_test_alloc_code_pages (guint n_pages)
+{
+  gboolean rwx_supported;
+  guint8 * result;
+
+  rwx_supported = gum_query_is_rwx_supported ();
+  result = gum_alloc_n_pages (n_pages,
+      rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+
+  if (!rwx_supported)
+    gum_memory_mark_code (result,
+        (gsize) n_pages * gum_query_page_size ());
+
+  return result;
+}
+
+static guint8 *
+gum_test_alloc_code_pages_near (guint n_pages,
+                                const GumAddressSpec * spec)
+{
+  gboolean rwx_supported;
+  guint8 * result;
+
+  rwx_supported = gum_query_is_rwx_supported ();
+  result = gum_alloc_n_pages_near (n_pages,
+      rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW, spec);
+
+  if (!rwx_supported)
+    gum_memory_mark_code (result,
+        (gsize) n_pages * gum_query_page_size ());
+
+  return result;
+}
 
 void
 lowlevel_helpers_init (void)
@@ -987,7 +1026,7 @@ proxy_func_new_relative_with_target (TargetFunc target_func)
 
   addr_spec.near_address = target_func;
   addr_spec.max_distance = G_MAXINT32 - gum_query_page_size ();
-  func = (guint8 *) gum_alloc_n_pages_near (1, GUM_PAGE_RWX, &addr_spec);
+  func = gum_test_alloc_code_pages_near (1, &addr_spec);
   func[0] = 0xe9;
   *((gint32 *) (func + 1)) =
       ((gssize) target_func) - (gssize) (func + 5);
@@ -1000,7 +1039,7 @@ proxy_func_new_absolute_indirect_with_target (TargetFunc target_func)
 {
   guint8 * func;
 
-  func = (guint8 *) gum_alloc_n_pages (1, GUM_PAGE_RWX);
+  func = gum_test_alloc_code_pages (1);
   func[0] = 0xff;
   func[1] = 0x25;
 # if GLIB_SIZEOF_VOID_P == 4
@@ -1018,7 +1057,7 @@ proxy_func_new_two_jumps_with_target (TargetFunc target_func)
 {
   guint8 * func;
 
-  func = (guint8 *) gum_alloc_n_pages (1, GUM_PAGE_RWX);
+  func = gum_test_alloc_code_pages (1);
   func[0] = 0xe9;
   *((gint32 *) (func + 1)) = (guint8 *) (func + 20) - (func + 5);
 
@@ -1042,7 +1081,7 @@ proxy_func_new_early_call_with_target (TargetFunc target_func)
 
   addr_spec.near_address = target_func;
   addr_spec.max_distance = G_MAXINT32 - gum_query_page_size ();
-  func = (guint8 *) gum_alloc_n_pages_near (1, GUM_PAGE_RWX, &addr_spec);
+  func = gum_test_alloc_code_pages_near (1, &addr_spec);
 
   code = func;
 
@@ -1092,7 +1131,7 @@ proxy_func_new_early_rip_relative_call_with_target (TargetFunc target_func)
 
   addr_spec.near_address = target_func;
   addr_spec.max_distance = G_MAXINT32 - gum_query_page_size ();
-  func = gum_alloc_n_pages_near (1, GUM_PAGE_RWX, &addr_spec);
+  func = gum_test_alloc_code_pages_near (1, &addr_spec);
 
   code = func;
 
