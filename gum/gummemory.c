@@ -241,10 +241,6 @@ gum_query_is_rwx_supported (void)
   return gum_query_rwx_support () == GUM_RWX_FULL;
 }
 
-#ifdef HAVE_ANDROID
-static gboolean gum_memory_is_wx_enforced_internal (void);
-#endif
-
 #ifdef G_OS_NONE
 G_GNUC_WEAK
 #endif
@@ -257,24 +253,6 @@ gum_query_rwx_support (void)
   return GUM_RWX_FULL;
 #endif
 }
-
-gboolean
-gum_memory_is_wx_enforced (void)
-{
-#ifdef HAVE_ANDROID
-  return gum_memory_is_wx_enforced_internal ();
-#else
-  return FALSE;
-#endif
-}
-
-#ifdef HAVE_ANDROID
-static gboolean
-gum_memory_is_wx_enforced_internal (void)
-{
-  return gum_android_get_api_level () >= 29;
-}
-#endif
 
 /**
  * gum_memory_patch_code:
@@ -365,10 +343,8 @@ gum_memory_patch_code_pages (GPtrArray * sorted_addresses,
   guint8 * apply_start, * apply_target_start;
   guint apply_num_pages;
   gboolean rwx_supported;
-  gboolean wx_enforced;
 
   rwx_supported = gum_query_is_rwx_supported ();
-  wx_enforced = gum_memory_is_wx_enforced ();
   page_size = gum_query_page_size ();
 
   if (gum_memory_can_remap_writable ())
@@ -518,14 +494,16 @@ cleanup:
   {
     GumPageProtection protection;
     GumSuspendOperation suspend_op = { 0, };
-    gboolean need_thread_suspension;
-    gboolean need_restore_protection;
+    GArray * original_protections;
+    gboolean restore_original;
+    guint num_patched_pages = 0;
 
-    protection = (rwx_supported && !wx_enforced) ? GUM_PAGE_RWX : GUM_PAGE_RW;
-    need_thread_suspension = !rwx_supported;
-    need_restore_protection = wx_enforced || need_thread_suspension;
+    protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
+    original_protections = g_array_new (FALSE, FALSE,
+        sizeof (GumPageProtection));
+    restore_original = TRUE;
 
-    if (need_thread_suspension)
+    if (!rwx_supported)
     {
       gum_metal_array_init (&suspend_op.suspended_threads,
           sizeof (GumThreadId));
@@ -538,59 +516,73 @@ cleanup:
     for (i = 0; i != sorted_addresses->len; i++)
     {
       gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+      GumPageProtection original_prot = GUM_PAGE_RX;
+
+      gum_memory_query_protection (target_page, &original_prot);
+      g_array_append_val (original_protections, original_prot);
 
       if (!gum_try_mprotect (target_page, page_size, protection))
       {
         result = FALSE;
-        goto resume_threads;
+        goto restore_pages;
       }
+
+      num_patched_pages++;
     }
 
-    apply_start = NULL;
-    apply_num_pages = 0;
-    for (i = 0; i != sorted_addresses->len; i++)
+    if (result)
     {
-      gpointer target_page = g_ptr_array_index (sorted_addresses, i);
-
-      if (coalesce)
-      {
-        if (apply_start != 0)
-        {
-          if (target_page == apply_start + (page_size * apply_num_pages))
-          {
-            apply_num_pages++;
-          }
-          else
-          {
-            apply (apply_start, apply_target_start, apply_num_pages,
-                apply_data);
-            apply_start = 0;
-          }
-        }
-
-        if (apply_start == 0)
-        {
-          apply_start = target_page;
-          apply_target_start = target_page;
-          apply_num_pages = 1;
-        }
-      }
-      else
-      {
-        apply (target_page, target_page, 1, apply_data);
-      }
-    }
-
-    if (apply_num_pages != 0)
-      apply (apply_start, apply_target_start, apply_num_pages, apply_data);
-
-    if (need_restore_protection)
-    {
+      apply_start = NULL;
+      apply_num_pages = 0;
       for (i = 0; i != sorted_addresses->len; i++)
       {
         gpointer target_page = g_ptr_array_index (sorted_addresses, i);
 
-        if (!gum_try_mprotect (target_page, page_size, GUM_PAGE_RX))
+        if (coalesce)
+        {
+          if (apply_start != 0)
+          {
+            if (target_page == apply_start + (page_size * apply_num_pages))
+            {
+              apply_num_pages++;
+            }
+            else
+            {
+              apply (apply_start, apply_target_start, apply_num_pages,
+                  apply_data);
+              apply_start = 0;
+            }
+          }
+
+          if (apply_start == 0)
+          {
+            apply_start = target_page;
+            apply_target_start = target_page;
+            apply_num_pages = 1;
+          }
+        }
+        else
+        {
+          apply (target_page, target_page, 1, apply_data);
+        }
+      }
+
+      if (apply_num_pages != 0)
+        apply (apply_start, apply_target_start, apply_num_pages, apply_data);
+    }
+
+restore_pages:
+    if (restore_original)
+    {
+      guint limit = MIN (num_patched_pages, original_protections->len);
+
+      for (i = 0; i != limit; i++)
+      {
+        gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+        GumPageProtection target_prot =
+            g_array_index (original_protections, GumPageProtection, i);
+
+        if (!gum_try_mprotect (target_page, page_size, target_prot))
         {
           result = FALSE;
           goto resume_threads;
@@ -606,7 +598,10 @@ cleanup:
     }
 
 resume_threads:
-    if (need_thread_suspension)
+    if (original_protections != NULL)
+      g_array_unref (original_protections);
+
+    if (!rwx_supported)
     {
       guint num_suspended, i;
 
@@ -1266,7 +1261,7 @@ gum_ensure_code_readable (gconstpointer address,
   gsize page_size;
   gconstpointer start_page, end_page, cur_page;
 
-  if (!gum_memory_is_wx_enforced ())
+  if (gum_android_get_api_level () < 29)
     return;
 
   page_size = gum_query_page_size ();
