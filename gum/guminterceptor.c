@@ -1081,6 +1081,8 @@ gum_apply_updates (gpointer source_page,
   GumInterceptorTransaction * self = user_data;
   GArray * pending;
   guint i;
+  gboolean page_marked = FALSE;
+  gsize page_size = gum_query_page_size ();
 
   if (_gum_memory_should_log_protection ())
   {
@@ -1118,6 +1120,18 @@ gum_apply_updates (gpointer source_page,
 
     update->func (self->interceptor, update->ctx,
         (guint8 *) source_page + offset);
+  }
+
+  if (!page_marked)
+  {
+    gboolean marked = gum_memory_mark_code (target_page, page_size);
+    page_marked = TRUE;
+
+    if (_gum_memory_should_log_protection ())
+    {
+      _gum_memory_log_protection_change ("patch:mark-code",
+          target_page, page_size, GUM_PAGE_RX, marked);
+    }
   }
 }
 
