@@ -13,6 +13,7 @@
 #include "guminterceptor-priv.h"
 #include "gumlibc.h"
 #include "gummemory.h"
+#include "gummemory-priv.h"
 #include "gummetalarray.h"
 #include "gumprocess-priv.h"
 #include "gumtls.h"
@@ -893,6 +894,13 @@ gum_interceptor_activate (GumInterceptor * self,
   g_assert (!ctx->activated);
   ctx->activated = TRUE;
 
+  if (_gum_memory_should_log_protection ())
+  {
+    g_message ("[gum-interceptor] activate ctx=%p function=%p prologue=%p "
+        "len=%u", ctx, ctx->function_address, prologue,
+        ctx->overwritten_prologue_len);
+  }
+
   _gum_interceptor_backend_activate_trampoline (self->backend, ctx,
       prologue);
 }
@@ -906,6 +914,13 @@ gum_interceptor_deactivate (GumInterceptor * self,
 
   g_assert (ctx->activated);
   ctx->activated = FALSE;
+
+  if (_gum_memory_should_log_protection ())
+  {
+    g_message ("[gum-interceptor] deactivate ctx=%p function=%p prologue=%p "
+        "len=%u", ctx, ctx->function_address, prologue,
+        ctx->overwritten_prologue_len);
+  }
 
   _gum_interceptor_backend_deactivate_trampoline (backend, ctx, prologue);
 }
@@ -1005,6 +1020,17 @@ gum_interceptor_transaction_end (GumInterceptorTransaction * self)
 
         update = &g_array_index (pending, GumUpdateTask, i);
 
+        if (_gum_memory_should_log_protection ())
+        {
+          gpointer prologue =
+              _gum_interceptor_backend_get_function_address (update->ctx);
+
+          g_message ("[gum-protect] patch:codesign ctx=%p function=%p "
+              "prologue=%p len=%u", update->ctx,
+              update->ctx->function_address, prologue,
+              update->ctx->overwritten_prologue_len);
+        }
+
         update->func (interceptor, update->ctx,
             _gum_interceptor_backend_get_function_address (update->ctx));
       }
@@ -1056,6 +1082,12 @@ gum_apply_updates (gpointer source_page,
   GArray * pending;
   guint i;
 
+  if (_gum_memory_should_log_protection ())
+  {
+    g_message ("[gum-protect] patch:apply-pages target_page=%p n_pages=%u "
+        "source_page=%p", target_page, n_pages, source_page);
+  }
+
   pending = g_hash_table_lookup (self->pending_update_tasks, target_page);
   g_assert (pending != NULL);
 
@@ -1069,6 +1101,20 @@ gum_apply_updates (gpointer source_page,
     offset = (guint8 *)
         _gum_interceptor_backend_get_function_address (update->ctx) -
         (guint8 *) target_page;
+
+    if (_gum_memory_should_log_protection ())
+    {
+      gpointer writable_addr = (guint8 *) source_page + offset;
+      gpointer target_addr = (guint8 *) target_page + offset;
+
+      g_message ("[gum-protect] patch:update ctx=%p function=%p target=%p "
+          "writable=%p len=%u",
+          update->ctx,
+          update->ctx->function_address,
+          target_addr,
+          writable_addr,
+          update->ctx->overwritten_prologue_len);
+    }
 
     update->func (self->interceptor, update->ctx,
         (guint8 *) source_page + offset);

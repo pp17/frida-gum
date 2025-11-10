@@ -33,6 +33,9 @@ G_GNUC_INTERNAL void _gum_memory_backend_init (void);
 G_GNUC_INTERNAL void _gum_memory_backend_deinit (void);
 G_GNUC_INTERNAL guint _gum_memory_backend_query_page_size (void);
 G_GNUC_INTERNAL gint _gum_page_protection_to_posix (GumPageProtection prot);
+G_GNUC_INTERNAL gboolean _gum_memory_should_log_protection (void);
+G_GNUC_INTERNAL void _gum_memory_log_protection_change (const gchar * tag,
+    gpointer address, gsize size, GumPageProtection prot, gboolean success);
 
 G_GNUC_INTERNAL gpointer gum_internal_malloc (size_t size);
 G_GNUC_INTERNAL gpointer gum_internal_calloc (size_t count, size_t size);

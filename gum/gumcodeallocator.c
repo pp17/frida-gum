@@ -10,6 +10,7 @@
 #include "gumcloak.h"
 #include "gumcodesegment.h"
 #include "gummemory.h"
+#include "gummemory-priv.h"
 #include "gumprocess-priv.h"
 #ifdef HAVE_ARM
 # include "gumarmwriter.h"
@@ -227,6 +228,8 @@ gum_code_allocator_commit (GumCodeAllocator * self)
     else if (!remap_supported)
     {
       gum_mprotect (pages->data, pages->size, GUM_PAGE_RX);
+      _gum_memory_log_protection_change ("code-allocator:commit",
+          pages->data, pages->size, GUM_PAGE_RX, TRUE);
     }
   }
   g_slist_free (self->uncommitted_pages);

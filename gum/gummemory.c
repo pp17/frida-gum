@@ -132,6 +132,63 @@ G_LOCK_DEFINE_STATIC (gum_softened_code_pages);
 static GHashTable * gum_softened_code_pages;
 #endif
 
+static gsize gum_memory_log_control_state = 0;
+static gboolean gum_memory_log_enabled = FALSE;
+
+static void gum_memory_format_page_protection (GumPageProtection prot,
+    gchar buf[4]);
+
+gboolean
+_gum_memory_should_log_protection (void)
+{
+  if (g_once_init_enter (&gum_memory_log_control_state))
+  {
+    gum_memory_log_enabled =
+        g_getenv ("FRIDA_GUM_LOG_PROTECT") != NULL;
+    g_once_init_leave (&gum_memory_log_control_state, 1);
+  }
+
+  return gum_memory_log_enabled;
+}
+
+void
+_gum_memory_log_protection_change (const gchar * tag,
+                                   gpointer address,
+                                   gsize size,
+                                   GumPageProtection prot,
+                                   gboolean success)
+{
+  gchar prot_buf[4];
+  guint8 * end;
+
+  if (!_gum_memory_should_log_protection ())
+    return;
+
+  gum_memory_format_page_protection (prot, prot_buf);
+  end = (guint8 *) address + size;
+
+  if (success)
+  {
+    g_message ("[gum-protect] %s addr=%p end=%p size=%zu prot=%s",
+        tag, address, end, size, prot_buf);
+  }
+  else
+  {
+    g_warning ("[gum-protect] %s FAILED addr=%p end=%p size=%zu prot=%s",
+        tag, address, end, size, prot_buf);
+  }
+}
+
+static void
+gum_memory_format_page_protection (GumPageProtection prot,
+                                   gchar buf[4])
+{
+  buf[0] = (prot & GUM_PAGE_READ) ? 'r' : '-';
+  buf[1] = (prot & GUM_PAGE_WRITE) ? 'w' : '-';
+  buf[2] = (prot & GUM_PAGE_EXECUTE) ? 'x' : '-';
+  buf[3] = '\0';
+}
+
 G_DEFINE_BOXED_TYPE (GumMatchPattern, gum_match_pattern, gum_match_pattern_ref,
                      gum_match_pattern_unref)
 G_DEFINE_BOXED_TYPE (GumMemoryRange, gum_memory_range, gum_memory_range_copy,
@@ -531,8 +588,13 @@ cleanup:
     for (i = 0; i != sorted_addresses->len; i++)
     {
       gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+      gboolean changed;
 
-      if (!gum_try_mprotect (target_page, page_size, protection))
+      changed = gum_try_mprotect (target_page, page_size, protection);
+      _gum_memory_log_protection_change ("patch:set-protection",
+          target_page, page_size, protection, changed);
+
+      if (!changed)
       {
         result = FALSE;
         goto restore_protections;
@@ -606,11 +668,16 @@ restore_protections:
 
         if (restore_base != NULL)
         {
-          if (!gum_try_mprotect (restore_base, restore_len * page_size,
-                  restore_protection))
-          {
+          gboolean restore_success;
+
+          restore_success = gum_try_mprotect (restore_base,
+              restore_len * page_size, restore_protection);
+          _gum_memory_log_protection_change ("patch:restore-protection",
+              restore_base, restore_len * page_size, restore_protection,
+              restore_success);
+
+          if (!restore_success)
             restore_ok = FALSE;
-          }
         }
 
         restore_base = target_page;
@@ -620,11 +687,16 @@ restore_protections:
 
       if (restore_base != NULL)
       {
-        if (!gum_try_mprotect (restore_base, restore_len * page_size,
-                restore_protection))
-        {
+        gboolean restore_success;
+
+        restore_success = gum_try_mprotect (restore_base,
+            restore_len * page_size, restore_protection);
+        _gum_memory_log_protection_change ("patch:restore-protection",
+            restore_base, restore_len * page_size, restore_protection,
+            restore_success);
+
+        if (!restore_success)
           restore_ok = FALSE;
-        }
       }
     }
 
