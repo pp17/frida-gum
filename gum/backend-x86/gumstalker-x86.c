@@ -953,7 +953,8 @@ gum_stalker_init (GumStalker * self)
 
   self->page_size = page_size;
   self->cpu_features = gum_query_cpu_features ();
-  self->is_rwx_supported = gum_query_rwx_support () != GUM_RWX_NONE;
+  self->is_rwx_supported =
+      !gum_memory_is_wx_enforced () && gum_query_rwx_support () != GUM_RWX_NONE;
 
   g_mutex_init (&self->mutex);
   self->contexts = NULL;

@@ -65,14 +65,14 @@ static gpointer allocate_clobber_test_invoker_func (ClobberTestFunc target_func,
 static guint8 *
 gum_test_alloc_code_pages (guint n_pages)
 {
-  gboolean rwx_supported;
+  gboolean wx_enforced;
   guint8 * result;
 
-  rwx_supported = gum_query_is_rwx_supported ();
+  wx_enforced = gum_memory_is_wx_enforced ();
   result = gum_alloc_n_pages (n_pages,
-      rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+      wx_enforced ? GUM_PAGE_RW : GUM_PAGE_RWX);
 
-  if (!rwx_supported)
+  if (wx_enforced)
     gum_memory_mark_code (result,
         (gsize) n_pages * gum_query_page_size ());
 
@@ -83,14 +83,14 @@ static guint8 *
 gum_test_alloc_code_pages_near (guint n_pages,
                                 const GumAddressSpec * spec)
 {
-  gboolean rwx_supported;
+  gboolean wx_enforced;
   guint8 * result;
 
-  rwx_supported = gum_query_is_rwx_supported ();
+  wx_enforced = gum_memory_is_wx_enforced ();
   result = gum_alloc_n_pages_near (n_pages,
-      rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW, spec);
+      wx_enforced ? GUM_PAGE_RW : GUM_PAGE_RWX, spec);
 
-  if (!rwx_supported)
+  if (wx_enforced)
     gum_memory_mark_code (result,
         (gsize) n_pages * gum_query_page_size ());
 

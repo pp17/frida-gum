@@ -241,20 +241,40 @@ gum_query_is_rwx_supported (void)
   return gum_query_rwx_support () == GUM_RWX_FULL;
 }
 
+#ifdef HAVE_ANDROID
+static gboolean gum_memory_is_wx_enforced_internal (void);
+#endif
+
 #ifdef G_OS_NONE
 G_GNUC_WEAK
 #endif
 GumRwxSupport
 gum_query_rwx_support (void)
 {
-#if defined (HAVE_ANDROID)
-  return GUM_RWX_NONE;
-#elif defined (HAVE_DARWIN) && !defined (HAVE_I386)
+#if defined (HAVE_DARWIN) && !defined (HAVE_I386)
   return GUM_RWX_NONE;
 #else
   return GUM_RWX_FULL;
 #endif
 }
+
+gboolean
+gum_memory_is_wx_enforced (void)
+{
+#ifdef HAVE_ANDROID
+  return gum_memory_is_wx_enforced_internal ();
+#else
+  return FALSE;
+#endif
+}
+
+#ifdef HAVE_ANDROID
+static gboolean
+gum_memory_is_wx_enforced_internal (void)
+{
+  return gum_android_get_api_level () >= 29;
+}
+#endif
 
 /**
  * gum_memory_patch_code:
@@ -345,8 +365,10 @@ gum_memory_patch_code_pages (GPtrArray * sorted_addresses,
   guint8 * apply_start, * apply_target_start;
   guint apply_num_pages;
   gboolean rwx_supported;
+  gboolean wx_enforced;
 
   rwx_supported = gum_query_is_rwx_supported ();
+  wx_enforced = gum_memory_is_wx_enforced ();
   page_size = gum_query_page_size ();
 
   if (gum_memory_can_remap_writable ())
@@ -496,10 +518,14 @@ cleanup:
   {
     GumPageProtection protection;
     GumSuspendOperation suspend_op = { 0, };
+    gboolean need_thread_suspension;
+    gboolean need_restore_protection;
 
-    protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
+    protection = (rwx_supported && !wx_enforced) ? GUM_PAGE_RWX : GUM_PAGE_RW;
+    need_thread_suspension = !rwx_supported;
+    need_restore_protection = need_thread_suspension || wx_enforced;
 
-    if (!rwx_supported)
+    if (need_thread_suspension)
     {
       gum_metal_array_init (&suspend_op.suspended_threads,
           sizeof (GumThreadId));
@@ -558,15 +584,8 @@ cleanup:
     if (apply_num_pages != 0)
       apply (apply_start, apply_target_start, apply_num_pages, apply_data);
 
-    if (!rwx_supported)
+    if (need_restore_protection)
     {
-      /*
-        * We don't bother restoring the protection on RWX systems, as we would
-        * have to determine the old protection to be able to do so safely.
-        *
-        * While we could easily do that, it would add overhead, but it's not
-        * really clear that it would have any tangible upsides.
-        */
       for (i = 0; i != sorted_addresses->len; i++)
       {
         gpointer target_page = g_ptr_array_index (sorted_addresses, i);
@@ -587,7 +606,7 @@ cleanup:
     }
 
 resume_threads:
-    if (!rwx_supported)
+    if (need_thread_suspension)
     {
       guint num_suspended, i;
 
@@ -1247,7 +1266,7 @@ gum_ensure_code_readable (gconstpointer address,
   gsize page_size;
   gconstpointer start_page, end_page, cur_page;
 
-  if (gum_android_get_api_level () < 29)
+  if (!gum_memory_is_wx_enforced ())
     return;
 
   page_size = gum_query_page_size ();
