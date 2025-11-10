@@ -250,8 +250,22 @@ gum_try_mprotect (gpointer address,
   GumPageProtection existing_prot;
   gsize actual_size;
   
+  const char* prot_str = (prot == GUM_PAGE_RWX) ? "RWX" :
+                         (prot == GUM_PAGE_RW) ? "RW" :
+                         (prot == GUM_PAGE_RX) ? "RX" :
+                         (prot == GUM_PAGE_READ) ? "R" : "?";
+  
+  g_print("[GUM] mprotect: addr=%p, size=%zu, aligned_addr=%p, aligned_size=%zu, prot=%s\n",
+      address, size, aligned_address, aligned_size, prot_str);
+  
   if (gum_memory_get_protection (address, size, &actual_size, &existing_prot))
   {
+    const char* existing_str = (existing_prot == GUM_PAGE_RWX) ? "RWX" :
+                               (existing_prot == GUM_PAGE_RW) ? "RW" :
+                               (existing_prot == GUM_PAGE_RX) ? "RX" :
+                               (existing_prot == GUM_PAGE_READ) ? "R" : "?";
+    g_print("[GUM] mprotect: existing prot=%s, actual_size=%zu\n", existing_str, actual_size);
+    
     /* If the requested region matches an existing region, use exact boundaries */
     if (actual_size >= size)
     {
@@ -265,7 +279,17 @@ gum_try_mprotect (gpointer address,
   }
   else
   {
+    g_print("[GUM] mprotect: could not query existing protection\n");
     result = mprotect (aligned_address, aligned_size, posix_prot);
+  }
+  
+  if (result != 0)
+  {
+    g_print("[GUM] mprotect FAILED: errno=%d (%s)\n", errno, strerror(errno));
+  }
+  else
+  {
+    g_print("[GUM] mprotect SUCCESS\n");
   }
 #else
   result = mprotect (aligned_address, aligned_size, posix_prot);

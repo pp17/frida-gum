@@ -872,8 +872,10 @@ gum_stalker_init (GumStalker * self)
    * This is safer and avoids detection by security mechanisms.
    */
   self->is_rwx_supported = FALSE;
+  g_print("[GUM] Stalker init: Android detected, forcing is_rwx_supported=FALSE\n");
 #else
   self->is_rwx_supported = gum_query_rwx_support () != GUM_RWX_NONE;
+  g_print("[GUM] Stalker init: is_rwx_supported=%d\n", self->is_rwx_supported);
 #endif
 
   g_mutex_init (&self->mutex);
@@ -2107,7 +2109,14 @@ gum_stalker_thaw (GumStalker * self,
     return;
 
   if (!self->is_rwx_supported)
+  {
+    g_print("[GUM] Stalker thaw: code=%p, size=%zu, setting RW\n", code, size);
     gum_mprotect (code, size, GUM_PAGE_RW);
+  }
+  else
+  {
+    g_print("[GUM] Stalker thaw: code=%p, size=%zu, skipped (RWX enabled)\n", code, size);
+  }
 }
 
 static void
@@ -2122,6 +2131,7 @@ gum_stalker_freeze (GumStalker * self,
       guint page_offset = GPOINTER_TO_SIZE (code) & (self->page_size - 1);
       if (page_offset != 0)
       {
+        g_print("[GUM] Stalker freeze (size=0): code=%p, marking page as RX\n", code);
         gum_memory_mark_code ((guint8 *) code - page_offset,
             self->page_size - page_offset);
       }
@@ -2131,7 +2141,14 @@ gum_stalker_freeze (GumStalker * self,
   }
 
   if (!self->is_rwx_supported)
+  {
+    g_print("[GUM] Stalker freeze: code=%p, size=%zu, setting RX\n", code, size);
     gum_memory_mark_code (code, size);
+  }
+  else
+  {
+    g_print("[GUM] Stalker freeze: code=%p, size=%zu, skipped (RWX enabled)\n", code, size);
+  }
 
   gum_clear_cache (code, size);
 }
@@ -2167,8 +2184,16 @@ gum_exec_ctx_new (GumStalker * stalker,
   // base = gum_memory_allocate (base + INT32_MAX / 2, stalker->ctx_size, stalker->page_size,
   //     stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   // g_warning("target base: %p, real base %p:",base + INT32_MAX / 2,base);
-  base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
-      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+  
+  GumPageProtection ctx_prot = stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
+  g_print("[GUM] Allocating exec ctx: size=%zu, prot=%s (is_rwx_supported=%d)\n",
+      stalker->ctx_size,
+      ctx_prot == GUM_PAGE_RWX ? "RWX" : (ctx_prot == GUM_PAGE_RW ? "RW" : "RX"),
+      stalker->is_rwx_supported);
+  
+  base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size, ctx_prot);
+  
+  g_print("[GUM] Allocated exec ctx at: %p\n", base);
 
   ctx = (GumExecCtx *) base;
 
@@ -5774,8 +5799,14 @@ gum_code_slab_new (GumExecCtx * ctx)
 
   gum_exec_ctx_compute_code_address_spec (ctx, total_size, &spec);
 
-  code_slab = gum_memory_allocate_near (&spec, total_size, stalker->page_size,
-      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+  GumPageProtection slab_prot = stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
+  g_print("[GUM] Allocating code slab: size=%zu, prot=%s (is_rwx_supported=%d)\n",
+      total_size,
+      slab_prot == GUM_PAGE_RWX ? "RWX" : (slab_prot == GUM_PAGE_RW ? "RW" : "RX"),
+      stalker->is_rwx_supported);
+  
+  code_slab = gum_memory_allocate_near (&spec, total_size, stalker->page_size, slab_prot);
+  
   if (code_slab == NULL)
   {
     g_error ("Unable to allocate code slab near %p with max_distance=%zu",

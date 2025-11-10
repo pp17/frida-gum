@@ -769,6 +769,8 @@ gum_memory_mark_code (gpointer address,
 {
   gboolean success;
 
+  g_print("[GUM] mark_code: addr=%p, size=%zu\n", address, size);
+
   if (gum_code_segment_is_supported ())
   {
     gsize page_size;
@@ -780,16 +782,19 @@ gum_memory_mark_code (gpointer address,
     end_page = GSIZE_TO_POINTER (
         (GPOINTER_TO_SIZE (address) + size - 1) & ~(page_size - 1));
 
+    g_print("[GUM] mark_code: using code_segment_mark\n");
     success = gum_code_segment_mark (start_page,
         end_page - start_page + page_size, NULL);
   }
   else
   {
+    g_print("[GUM] mark_code: using mprotect RX\n");
     success = gum_try_mprotect (address, size, GUM_PAGE_RX);
   }
 
   gum_clear_cache (address, size);
 
+  g_print("[GUM] mark_code: success=%d\n", success);
   return success;
 }
 
