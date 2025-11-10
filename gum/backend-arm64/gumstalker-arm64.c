@@ -2098,7 +2098,7 @@ gum_stalker_thaw (GumStalker * self,
   if (size == 0)
     return;
 
-  gum_mprotect (code, size, GUM_PAGE_RW);
+  gum_mprotect (code, size, self->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
 }
 
 static void
@@ -2155,7 +2155,7 @@ gum_exec_ctx_new (GumStalker * stalker,
   //     stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   // g_warning("target base: %p, real base %p:",base + INT32_MAX / 2,base);
     base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
-        GUM_PAGE_RW);
+        stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
 
   ctx = (GumExecCtx *) base;
 
@@ -5762,7 +5762,7 @@ gum_code_slab_new (GumExecCtx * ctx)
   gum_exec_ctx_compute_code_address_spec (ctx, total_size, &spec);
 
   code_slab = gum_memory_allocate_near (&spec, total_size, stalker->page_size,
-      GUM_PAGE_RW);
+      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   if (code_slab == NULL)
   {
     g_error ("Unable to allocate code slab near %p with max_distance=%zu",

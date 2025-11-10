@@ -1734,7 +1734,7 @@ gum_stalker_thaw (GumStalker * self,
   if (size == 0)
     return;
 
-  gum_mprotect (code, size, GUM_PAGE_RW);
+  gum_mprotect (code, size, self->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
 }
 
 static void
@@ -1771,7 +1771,7 @@ gum_exec_ctx_new (GumStalker * stalker,
   GumDataSlab * data_slab;
 
   base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
-      GUM_PAGE_RW);
+      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
 
   ctx = (GumExecCtx *) base;
 
@@ -6029,7 +6029,7 @@ gum_code_slab_new (GumExecCtx * ctx)
   gum_exec_ctx_compute_code_address_spec (ctx, slab_size, &spec);
 
   slab = gum_memory_allocate_near (&spec, slab_size, stalker->page_size,
-      GUM_PAGE_RW);
+      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
 
   gum_code_slab_init (slab, slab_size, stalker->page_size);
 
