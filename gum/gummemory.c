@@ -668,11 +668,19 @@ restore_protections:
         if (restore_base != NULL)
         {
           gboolean restore_success;
+          GumPageProtection desired_protection = restore_protection;
+
+          if ((desired_protection & GUM_PAGE_EXECUTE) == 0 &&
+              (protection & GUM_PAGE_EXECUTE) != 0)
+          {
+            desired_protection =
+                (desired_protection & ~GUM_PAGE_WRITE) | GUM_PAGE_EXECUTE;
+          }
 
           restore_success = gum_try_mprotect (restore_base,
-              restore_len * page_size, restore_protection);
+              restore_len * page_size, desired_protection);
           _gum_memory_log_protection_change ("patch:restore-protection",
-              restore_base, restore_len * page_size, restore_protection,
+              restore_base, restore_len * page_size, desired_protection,
               restore_success);
 
           if (!restore_success)
@@ -687,11 +695,19 @@ restore_protections:
       if (restore_base != NULL)
       {
         gboolean restore_success;
+        GumPageProtection desired_protection = restore_protection;
+
+        if ((desired_protection & GUM_PAGE_EXECUTE) == 0 &&
+            (protection & GUM_PAGE_EXECUTE) != 0)
+        {
+          desired_protection =
+              (desired_protection & ~GUM_PAGE_WRITE) | GUM_PAGE_EXECUTE;
+        }
 
         restore_success = gum_try_mprotect (restore_base,
-            restore_len * page_size, restore_protection);
+            restore_len * page_size, desired_protection);
         _gum_memory_log_protection_change ("patch:restore-protection",
-            restore_base, restore_len * page_size, restore_protection,
+            restore_base, restore_len * page_size, desired_protection,
             restore_success);
 
         if (!restore_success)
