@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2010-2025 Ole André Vadla Ravnås <oleavr@nowsecure.com>
  * Copyright (C) 2022 Håvard Sørbø <havard@hsorbo.no>
- * Copyright (C) 2022 Francesco Tamagni <mrmacete@protonmail.ch>
+ * Copyright (C) 2022-2025 Francesco Tamagni <mrmacete@protonmail.ch>
  *
  * Licence: wxWindows Library Licence, Version 3.1
  */
@@ -117,17 +117,23 @@ typedef x86_debug_state64_t GumDarwinNativeDebugState;
 typedef arm_unified_thread_state_t GumDarwinUnifiedThreadState;
 # if GLIB_SIZEOF_VOID_P == 4
 typedef arm_thread_state32_t GumDarwinNativeThreadState;
+typedef arm_neon_state32_t GumDarwinNativeNeonState;
 typedef arm_debug_state32_t GumDarwinNativeDebugState;
 # else
 typedef arm_thread_state64_t GumDarwinNativeThreadState;
+typedef arm_neon_state64_t GumDarwinNativeNeonState;
 typedef arm_debug_state64_t GumDarwinNativeDebugState;
 # endif
 # define GUM_DARWIN_THREAD_STATE_COUNT ARM_UNIFIED_THREAD_STATE_COUNT
 # define GUM_DARWIN_THREAD_STATE_FLAVOR ARM_UNIFIED_THREAD_STATE
 # if GLIB_SIZEOF_VOID_P == 4
+#  define GUM_DARWIN_NEON_STATE_COUNT ARM_NEON_STATE_COUNT
+#  define GUM_DARWIN_NEON_STATE_FLAVOR ARM_NEON_STATE
 #  define GUM_DARWIN_DEBUG_STATE_COUNT ARM_DEBUG_STATE32_COUNT
 #  define GUM_DARWIN_DEBUG_STATE_FLAVOR ARM_DEBUG_STATE32
 # else
+#  define GUM_DARWIN_NEON_STATE_COUNT ARM_NEON_STATE64_COUNT
+#  define GUM_DARWIN_NEON_STATE_FLAVOR ARM_NEON_STATE64
 #  define GUM_DARWIN_DEBUG_STATE_COUNT ARM_DEBUG_STATE64_COUNT
 #  define GUM_DARWIN_DEBUG_STATE_FLAVOR ARM_DEBUG_STATE64
 # endif
@@ -139,6 +145,9 @@ typedef struct _GumDarwinPThreadIter GumDarwinPThreadIter;
 typedef struct _GumDarwinPThreadSpec GumDarwinPThreadSpec;
 typedef struct _GumDarwinPThreadList GumDarwinPThreadList;
 typedef struct _GumDarwinPThread GumDarwinPThread;
+typedef struct _GumDarwinImageSnapshot GumDarwinImageSnapshot;
+typedef struct _GumDarwinImage GumDarwinImage;
+typedef struct _GumDarwinImageIter GumDarwinImageIter;
 
 TAILQ_HEAD (_GumDarwinPThreadList, _GumDarwinPThread);
 
@@ -156,7 +165,11 @@ struct _GumDarwinAllImageInfos
 
   GumAddress dyld_image_load_address;
 
+  GumAddress dyld_all_image_infos_address;
+
+  guint8 shared_cache_uuid[16];
   GumAddress shared_cache_base_address;
+  GumAddress shared_cache_slide;
 };
 
 struct _GumDarwinMappingDetails
@@ -191,8 +204,21 @@ struct _GumDarwinPThread
   TAILQ_ENTRY (_GumDarwinPThread) tl_plist;
 };
 
+struct _GumDarwinImage
+{
+  const gchar * path;
+  GumMemoryRange range;
+};
+
+struct _GumDarwinImageIter
+{
+  const GumDarwinImageSnapshot * snapshot;
+  gint index;
+};
+
 GUM_API gboolean gum_darwin_check_xnu_version (guint major, guint minor,
     guint micro);
+GUM_API gboolean gum_darwin_is_debugger_mapping_enforced (void);
 
 GUM_API guint8 * gum_darwin_read (mach_port_t task, GumAddress address,
     gsize len, gsize * n_bytes_read);
@@ -207,7 +233,7 @@ GUM_API gboolean gum_darwin_query_page_size (mach_port_t task,
 GUM_API const gchar * gum_darwin_query_sysroot (void);
 GUM_API gboolean gum_darwin_query_hardened (void);
 GUM_API gboolean gum_darwin_query_all_image_infos (mach_port_t task,
-    GumDarwinAllImageInfos * infos);
+    GumDarwinAllImageInfos * infos, GError ** error);
 GUM_API gboolean gum_darwin_query_mapped_address (mach_port_t task,
     GumAddress address, GumDarwinMappingDetails * details);
 GUM_API gboolean gum_darwin_query_protection (mach_port_t task,
@@ -227,6 +253,18 @@ GUM_API GumModule * gum_darwin_find_module_by_name (mach_port_t task,
     const gchar * name);
 GUM_API void gum_darwin_enumerate_modules (mach_port_t task,
     GumFoundModuleFunc func, gpointer user_data);
+GUM_API GumDarwinImageSnapshot * gum_darwin_snapshot_images (mach_port_t task,
+    GError ** error);
+GUM_API GumDarwinImageSnapshot * gum_darwin_image_snapshot_ref (
+    GumDarwinImageSnapshot * snapshot);
+GUM_API void gum_darwin_image_snapshot_unref (
+    GumDarwinImageSnapshot * snapshot);
+GUM_API gchar * gum_darwin_image_snapshot_infer_sysroot (
+    const GumDarwinImageSnapshot * self);
+GUM_API void gum_darwin_image_iter_init (GumDarwinImageIter * iter,
+    const GumDarwinImageSnapshot * snapshot);
+GUM_API gboolean gum_darwin_image_iter_next (GumDarwinImageIter * iter,
+    const GumDarwinImage ** image);
 GUM_API void gum_darwin_enumerate_ranges (mach_port_t task,
     GumPageProtection prot, GumFoundRangeFunc func, gpointer user_data);
 GUM_API gboolean gum_darwin_query_thread_state (mach_port_t thread,
@@ -254,10 +292,18 @@ GUM_API void gum_darwin_parse_unified_thread_state (
     const GumDarwinUnifiedThreadState * ts, GumCpuContext * ctx);
 GUM_API void gum_darwin_parse_native_thread_state (
     const GumDarwinNativeThreadState * ts, GumCpuContext * ctx);
+#if defined (__arm__) || defined (__aarch64__)
+GUM_API void gum_darwin_parse_native_neon_state (
+    const GumDarwinNativeNeonState * ns, GumCpuContext * ctx);
+#endif
 GUM_API void gum_darwin_unparse_unified_thread_state (
     const GumCpuContext * ctx, GumDarwinUnifiedThreadState * ts);
 GUM_API void gum_darwin_unparse_native_thread_state (
     const GumCpuContext * ctx, GumDarwinNativeThreadState * ts);
+#if defined (__arm__) || defined (__aarch64__)
+GUM_API void gum_darwin_unparse_native_neon_state (
+    const GumCpuContext * ctx, GumDarwinNativeNeonState * ns);
+#endif
 
 GUM_API GumPageProtection gum_page_protection_from_mach (vm_prot_t native_prot);
 GUM_API vm_prot_t gum_page_protection_to_mach (GumPageProtection prot);
