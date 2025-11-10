@@ -143,8 +143,7 @@ _gum_memory_should_log_protection (void)
 {
   if (g_once_init_enter (&gum_memory_log_control_state))
   {
-    gum_memory_log_enabled =
-        g_getenv ("FRIDA_GUM_LOG_PROTECT") != NULL;
+    gum_memory_log_enabled = TRUE;
     g_once_init_leave (&gum_memory_log_control_state, 1);
   }
 
