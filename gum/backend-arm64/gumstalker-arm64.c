@@ -2098,8 +2098,7 @@ gum_stalker_thaw (GumStalker * self,
   if (size == 0)
     return;
 
-  if (!self->is_rwx_supported)
-    gum_mprotect (code, size, GUM_PAGE_RW);
+  gum_mprotect (code, size, GUM_PAGE_RW);
 }
 
 static void
@@ -2109,21 +2108,17 @@ gum_stalker_freeze (GumStalker * self,
 {
   if (size == 0)
   {
-    if (!self->is_rwx_supported)
+    guint page_offset = GPOINTER_TO_SIZE (code) & (self->page_size - 1);
+    if (page_offset != 0)
     {
-      guint page_offset = GPOINTER_TO_SIZE (code) & (self->page_size - 1);
-      if (page_offset != 0)
-      {
-        gum_memory_mark_code ((guint8 *) code - page_offset,
-            self->page_size - page_offset);
-      }
+      gum_memory_mark_code ((guint8 *) code - page_offset,
+          self->page_size - page_offset);
     }
 
     return;
   }
 
-  if (!self->is_rwx_supported)
-    gum_memory_mark_code (code, size);
+  gum_memory_mark_code (code, size);
 
   gum_clear_cache (code, size);
 }
@@ -2159,8 +2154,8 @@ gum_exec_ctx_new (GumStalker * stalker,
   // base = gum_memory_allocate (base + INT32_MAX / 2, stalker->ctx_size, stalker->page_size,
   //     stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   // g_warning("target base: %p, real base %p:",base + INT32_MAX / 2,base);
-  base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
-      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+    base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
+        GUM_PAGE_RW);
 
   ctx = (GumExecCtx *) base;
 
@@ -5767,7 +5762,7 @@ gum_code_slab_new (GumExecCtx * ctx)
   gum_exec_ctx_compute_code_address_spec (ctx, total_size, &spec);
 
   code_slab = gum_memory_allocate_near (&spec, total_size, stalker->page_size,
-      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+      GUM_PAGE_RW);
   if (code_slab == NULL)
   {
     g_error ("Unable to allocate code slab near %p with max_distance=%zu",

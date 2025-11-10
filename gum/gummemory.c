@@ -494,6 +494,10 @@ cleanup:
   {
     GumPageProtection protection;
     GumSuspendOperation suspend_op = { 0, };
+    GArray * original_protections = NULL;
+    guint changed_pages = 0;
+    gboolean applied_pages = FALSE;
+    gboolean restore_ok = TRUE;
 
     protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
 
@@ -507,6 +511,23 @@ cleanup:
           GUM_THREAD_FLAGS_NONE);
     }
 
+    if (sorted_addresses->len != 0)
+    {
+      original_protections = g_array_sized_new (FALSE, FALSE,
+          sizeof (GumPageProtection), sorted_addresses->len);
+
+      for (i = 0; i != sorted_addresses->len; i++)
+      {
+        gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+        GumPageProtection original_protection;
+
+        if (!gum_memory_query_protection (target_page, &original_protection))
+          original_protection = GUM_PAGE_RX;
+
+        g_array_append_val (original_protections, original_protection);
+      }
+    }
+
     for (i = 0; i != sorted_addresses->len; i++)
     {
       gpointer target_page = g_ptr_array_index (sorted_addresses, i);
@@ -514,8 +535,10 @@ cleanup:
       if (!gum_try_mprotect (target_page, page_size, protection))
       {
         result = FALSE;
-        goto resume_threads;
+        goto restore_protections;
       }
+
+      changed_pages++;
     }
 
     apply_start = NULL;
@@ -556,32 +579,68 @@ cleanup:
     if (apply_num_pages != 0)
       apply (apply_start, apply_target_start, apply_num_pages, apply_data);
 
-    if (!rwx_supported)
+    applied_pages = TRUE;
+    changed_pages = sorted_addresses->len;
+
+restore_protections:
+    if (original_protections != NULL && changed_pages != 0)
     {
-      /*
-        * We don't bother restoring the protection on RWX systems, as we would
-        * have to determine the old protection to be able to do so safely.
-        *
-        * While we could easily do that, it would add overhead, but it's not
-        * really clear that it would have any tangible upsides.
-        */
-      for (i = 0; i != sorted_addresses->len; i++)
+      gpointer restore_base = NULL;
+      GumPageProtection restore_protection = 0;
+      guint restore_len = 0;
+
+      for (i = 0; i != changed_pages; i++)
       {
         gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+        GumPageProtection page_protection =
+            g_array_index (original_protections, GumPageProtection, i);
 
-        if (!gum_try_mprotect (target_page, page_size, GUM_PAGE_RX))
+        if (restore_base != NULL &&
+            page_protection == restore_protection &&
+            target_page ==
+                (guint8 *) restore_base + (restore_len * page_size))
         {
-          result = FALSE;
-          goto resume_threads;
+          restore_len++;
+          continue;
+        }
+
+        if (restore_base != NULL)
+        {
+          if (!gum_try_mprotect (restore_base, restore_len * page_size,
+                  restore_protection))
+          {
+            restore_ok = FALSE;
+          }
+        }
+
+        restore_base = target_page;
+        restore_protection = page_protection;
+        restore_len = 1;
+      }
+
+      if (restore_base != NULL)
+      {
+        if (!gum_try_mprotect (restore_base, restore_len * page_size,
+                restore_protection))
+        {
+          restore_ok = FALSE;
         }
       }
     }
 
-    for (i = 0; i != sorted_addresses->len; i++)
-    {
-      gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+    if (original_protections != NULL)
+      g_array_unref (original_protections);
 
-      gum_clear_cache (target_page, page_size);
+    result = result && restore_ok;
+
+    if (applied_pages)
+    {
+      for (i = 0; i != sorted_addresses->len; i++)
+      {
+        gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+
+        gum_clear_cache (target_page, page_size);
+      }
     }
 
 resume_threads:

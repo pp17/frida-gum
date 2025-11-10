@@ -204,13 +204,12 @@ gum_code_allocator_try_alloc_slice_near (GumCodeAllocator * self,
 void
 gum_code_allocator_commit (GumCodeAllocator * self)
 {
-  gboolean rwx_supported, remap_supported;
+  gboolean rwx_supported;
   GSList * cur;
   GHashTableIter iter;
   gpointer key;
 
   rwx_supported = gum_query_is_rwx_supported ();
-  remap_supported = gum_memory_can_remap_writable ();
 
   for (cur = self->uncommitted_pages; cur != NULL; cur = cur->next)
   {
@@ -224,9 +223,9 @@ gum_code_allocator_commit (GumCodeAllocator * self)
           gum_code_segment_get_virtual_size (segment),
           gum_code_segment_get_address (segment));
     }
-    else if (!remap_supported)
+    else
     {
-      gum_mprotect (pages->data, pages->size, GUM_PAGE_RX);
+      gum_mprotect (pages->pc, pages->size, GUM_PAGE_RX);
     }
   }
   g_slist_free (self->uncommitted_pages);
@@ -237,7 +236,9 @@ gum_code_allocator_commit (GumCodeAllocator * self)
   {
     GumCodePages * pages = key;
 
-    gum_clear_cache (pages->data, pages->size);
+    gum_clear_cache (pages->pc, pages->size);
+    if (pages->pc != pages->data)
+      gum_clear_cache (pages->data, pages->size);
   }
   g_hash_table_remove_all (self->dirty_pages);
 
@@ -346,8 +347,7 @@ gum_code_allocator_try_alloc_batch_near (GumCodeAllocator * self,
     }
   }
 
-  if (!rwx_supported)
-    self->uncommitted_pages = g_slist_prepend (self->uncommitted_pages, pages);
+  self->uncommitted_pages = g_slist_prepend (self->uncommitted_pages, pages);
 
   g_hash_table_add (self->dirty_pages, pages);
 
