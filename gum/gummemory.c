@@ -522,8 +522,8 @@ cleanup:
     gboolean need_restore_protection;
 
     protection = (rwx_supported && !wx_enforced) ? GUM_PAGE_RWX : GUM_PAGE_RW;
-    need_thread_suspension = !rwx_supported || wx_enforced;
-    need_restore_protection = need_thread_suspension;
+    need_thread_suspension = !rwx_supported;
+    need_restore_protection = wx_enforced || need_thread_suspension;
 
     if (need_thread_suspension)
     {
