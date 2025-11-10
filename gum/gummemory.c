@@ -17,11 +17,13 @@
 #ifdef HAVE_PTRAUTH
 # include <ptrauth.h>
 #endif
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef HAVE_ANDROID
 # include "gum/gumandroid.h"
+# include "backend-linux/gumlinux-priv.h"
 #endif
 #ifndef GUM_USE_SYSTEM_ALLOC
 # ifdef HAVE_DARWIN
@@ -58,6 +60,9 @@
 typedef struct _GumPatchCodeContext GumPatchCodeContext;
 typedef struct _GumPageLump GumPageLump;
 typedef struct _GumSuspendOperation GumSuspendOperation;
+#ifdef HAVE_ANDROID
+typedef struct _GumAndroidRegion GumAndroidRegion;
+#endif
 
 struct _GumMatchPattern
 {
@@ -87,11 +92,26 @@ struct _GumSuspendOperation
   GumThreadId current_thread_id;
   GumMetalArray suspended_threads;
 };
+#ifdef HAVE_ANDROID
+struct _GumAndroidRegion
+{
+  guint8 * start;
+  gsize size;
+  GumPageProtection original_prot;
+  gboolean prot_changed;
+};
+#endif
 
 static void gum_apply_patch_code (gpointer mem, gpointer target_page,
     guint n_pages, gpointer user_data);
 static gboolean gum_maybe_suspend_thread (const GumThreadDetails * details,
     gpointer user_data);
+#ifdef HAVE_ANDROID
+static gboolean gum_android_query_mapping (gconstpointer address,
+    guint8 ** start, gsize * size, GumPageProtection * prot);
+static GumPageProtection gum_android_perms_to_prot (const gchar * perms);
+static gboolean gum_android_restore_regions (GArray * regions);
+#endif
 
 static void gum_memory_scan_raw (const GumMemoryRange * range,
     const GumMatchPattern * pattern, GumMemoryScanMatchFunc func,
@@ -331,6 +351,90 @@ gum_apply_patch_code (gpointer mem,
   context->func ((guint8 *) mem + context->page_offset, context->user_data);
 }
 
+#ifdef HAVE_ANDROID
+static GumPageProtection
+gum_android_perms_to_prot (const gchar * perms)
+{
+  GumPageProtection prot = GUM_PAGE_NO_ACCESS;
+
+  if (perms[0] == 'r')
+    prot |= GUM_PAGE_READ;
+  if (perms[1] == 'w')
+    prot |= GUM_PAGE_WRITE;
+  if (perms[2] == 'x')
+    prot |= GUM_PAGE_EXECUTE;
+
+  return prot;
+}
+
+static gboolean
+gum_android_query_mapping (gconstpointer address,
+                           guint8 ** start,
+                           gsize * size,
+                           GumPageProtection * prot)
+{
+  GumProcMapsIter iter;
+  gboolean success = FALSE;
+  const gchar * line;
+
+  gum_proc_maps_iter_init_for_self (&iter);
+
+  while (!success && gum_proc_maps_iter_next (&iter, &line))
+  {
+    gpointer start_ptr, end_ptr;
+    gchar perms[5] = { 0, };
+
+    if (sscanf (line, "%p-%p %4s", &start_ptr, &end_ptr, perms) != 3)
+      continue;
+
+    if ((const guint8 *) address >= (const guint8 *) start_ptr &&
+        (const guint8 *) address < (const guint8 *) end_ptr)
+    {
+      if (start != NULL)
+        *start = start_ptr;
+      if (size != NULL)
+        *size = (gsize) ((const guint8 *) end_ptr -
+            (const guint8 *) start_ptr);
+      if (prot != NULL)
+        *prot = gum_android_perms_to_prot (perms);
+
+      success = TRUE;
+    }
+  }
+
+  gum_proc_maps_iter_destroy (&iter);
+
+  return success;
+}
+
+static gboolean
+gum_android_restore_regions (GArray * regions)
+{
+  guint idx;
+  gboolean success = TRUE;
+
+  if (regions == NULL)
+    return TRUE;
+
+  for (idx = 0; idx != regions->len; idx++)
+  {
+    GumAndroidRegion * region = &g_array_index (regions, GumAndroidRegion, idx);
+
+    if (!region->prot_changed)
+      continue;
+
+    if (!gum_try_mprotect (region->start, region->size, region->original_prot))
+    {
+      success = FALSE;
+    }
+
+    region->prot_changed = FALSE;
+  }
+
+  return success;
+}
+#endif
+
 gboolean
 gum_memory_patch_code_pages (GPtrArray * sorted_addresses,
                              gboolean coalesce,
@@ -494,6 +598,10 @@ cleanup:
   {
     GumPageProtection protection;
     GumSuspendOperation suspend_op = { 0, };
+#ifdef HAVE_ANDROID
+      GArray * android_regions = NULL;
+      gboolean android_use_regions = FALSE;
+#endif
 
     protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
 
@@ -507,104 +615,200 @@ cleanup:
           GUM_THREAD_FLAGS_NONE);
     }
 
-    for (i = 0; i != sorted_addresses->len; i++)
-    {
-      gpointer target_page = g_ptr_array_index (sorted_addresses, i);
-
-      if (!gum_try_mprotect (target_page, page_size, protection))
+#ifdef HAVE_ANDROID
+      if (rwx_supported)
       {
-        result = FALSE;
-        goto resume_threads;
-      }
-    }
+        android_regions = g_array_new (FALSE, FALSE, sizeof (GumAndroidRegion));
 
-    apply_start = NULL;
-    apply_num_pages = 0;
-    for (i = 0; i != sorted_addresses->len; i++)
-    {
-      gpointer target_page = g_ptr_array_index (sorted_addresses, i);
-
-      if (coalesce)
-      {
-        if (apply_start != 0)
+        for (i = 0; i != sorted_addresses->len; i++)
         {
-          if (target_page == apply_start + (page_size * apply_num_pages))
+          guint8 * target_page = g_ptr_array_index (sorted_addresses, i);
+          guint8 * region_start;
+          gsize region_size;
+          GumPageProtection region_prot;
+
+          if (!gum_android_query_mapping (target_page, &region_start,
+              &region_size, &region_prot))
           {
-            apply_num_pages++;
+            g_array_unref (android_regions);
+            android_regions = NULL;
+            break;
           }
-          else
+
+          gboolean already_added = FALSE;
+          guint j;
+
+          for (j = 0; j != android_regions->len; j++)
           {
-            apply (apply_start, apply_target_start, apply_num_pages,
-                apply_data);
-            apply_start = 0;
+            GumAndroidRegion * existing = &g_array_index (android_regions,
+                GumAndroidRegion, j);
+
+            if (existing->start == region_start)
+            {
+              already_added = TRUE;
+              break;
+            }
+          }
+
+          if (!already_added)
+          {
+            GumAndroidRegion region_info;
+
+            region_info.start = region_start;
+            region_info.size = region_size;
+            region_info.original_prot = region_prot;
+            region_info.prot_changed = FALSE;
+
+            g_array_append_val (android_regions, region_info);
           }
         }
 
-        if (apply_start == 0)
+        if (android_regions != NULL)
+          android_use_regions = TRUE;
+      }
+#endif
+
+#ifdef HAVE_ANDROID
+      if (android_use_regions)
+      {
+        guint region_index;
+
+        for (region_index = 0; region_index != android_regions->len;
+            region_index++)
         {
-          apply_start = target_page;
-          apply_target_start = target_page;
-          apply_num_pages = 1;
+          GumAndroidRegion * region =
+              &g_array_index (android_regions, GumAndroidRegion, region_index);
+          GumPageProtection desired = region->original_prot | GUM_PAGE_WRITE;
+
+          if (desired != region->original_prot)
+          {
+            if (!gum_try_mprotect (region->start, region->size, desired))
+            {
+              result = FALSE;
+              gum_android_restore_regions (android_regions);
+              goto resume_threads;
+            }
+
+            region->prot_changed = TRUE;
+          }
         }
       }
       else
+#endif
       {
-        apply (target_page, target_page, 1, apply_data);
+        for (i = 0; i != sorted_addresses->len; i++)
+        {
+          gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+
+          if (!gum_try_mprotect (target_page, page_size, protection))
+          {
+            result = FALSE;
+            goto resume_threads;
+          }
+        }
       }
-    }
 
-    if (apply_num_pages != 0)
-      apply (apply_start, apply_target_start, apply_num_pages, apply_data);
-
-    if (!rwx_supported)
-    {
-      /*
-        * We don't bother restoring the protection on RWX systems, as we would
-        * have to determine the old protection to be able to do so safely.
-        *
-        * While we could easily do that, it would add overhead, but it's not
-        * really clear that it would have any tangible upsides.
-        */
+      apply_start = NULL;
+      apply_num_pages = 0;
       for (i = 0; i != sorted_addresses->len; i++)
       {
         gpointer target_page = g_ptr_array_index (sorted_addresses, i);
 
-        if (!gum_try_mprotect (target_page, page_size, GUM_PAGE_RX))
+        if (coalesce)
         {
-          result = FALSE;
-          goto resume_threads;
+          if (apply_start != 0)
+          {
+            if (target_page == apply_start + (page_size * apply_num_pages))
+            {
+              apply_num_pages++;
+            }
+            else
+            {
+              apply (apply_start, apply_target_start, apply_num_pages,
+                  apply_data);
+              apply_start = 0;
+            }
+          }
+
+          if (apply_start == 0)
+          {
+            apply_start = target_page;
+            apply_target_start = target_page;
+            apply_num_pages = 1;
+          }
+        }
+        else
+        {
+          apply (target_page, target_page, 1, apply_data);
         }
       }
-    }
 
-    for (i = 0; i != sorted_addresses->len; i++)
-    {
-      gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+      if (apply_num_pages != 0)
+        apply (apply_start, apply_target_start, apply_num_pages, apply_data);
 
-      gum_clear_cache (target_page, page_size);
-    }
-
-resume_threads:
-    if (!rwx_supported)
-    {
-      guint num_suspended, i;
-
-      num_suspended = suspend_op.suspended_threads.length;
-
-      for (i = 0; i != num_suspended; i++)
+#ifdef HAVE_ANDROID
+      if (android_use_regions &&
+          !gum_android_restore_regions (android_regions))
       {
-        GumThreadId * raw_id = gum_metal_array_element_at (
-            &suspend_op.suspended_threads, i);
-
-        gum_thread_resume (*raw_id, NULL);
-#ifdef HAVE_DARWIN
-        mach_port_mod_refs (mach_task_self (), *raw_id,
-            MACH_PORT_RIGHT_SEND, -1);
+        result = FALSE;
+        goto resume_threads;
+      }
 #endif
+
+      if (!rwx_supported)
+      {
+        /*
+          * We don't bother restoring the protection on RWX systems, as we would
+          * have to determine the old protection to be able to do so safely.
+          *
+          * While we could easily do that, it would add overhead, but it's not
+          * really clear that it would have any tangible upsides.
+          */
+        for (i = 0; i != sorted_addresses->len; i++)
+        {
+          gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+
+          if (!gum_try_mprotect (target_page, page_size, GUM_PAGE_RX))
+          {
+            result = FALSE;
+            goto resume_threads;
+          }
+        }
       }
 
-      gum_metal_array_free (&suspend_op.suspended_threads);
-    }
+      for (i = 0; i != sorted_addresses->len; i++)
+      {
+        gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+
+        gum_clear_cache (target_page, page_size);
+      }
+
+resume_threads:
+      if (!rwx_supported)
+      {
+        guint num_suspended, i;
+
+        num_suspended = suspend_op.suspended_threads.length;
+
+        for (i = 0; i != num_suspended; i++)
+        {
+          GumThreadId * raw_id = gum_metal_array_element_at (
+              &suspend_op.suspended_threads, i);
+
+          gum_thread_resume (*raw_id, NULL);
+#ifdef HAVE_DARWIN
+          mach_port_mod_refs (mach_task_self (), *raw_id,
+              MACH_PORT_RIGHT_SEND, -1);
+#endif
+        }
+
+        gum_metal_array_free (&suspend_op.suspended_threads);
+      }
+
+#ifdef HAVE_ANDROID
+      if (android_regions != NULL)
+        g_array_unref (android_regions);
+#endif
   }
   else
   {
