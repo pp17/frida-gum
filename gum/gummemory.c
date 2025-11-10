@@ -17,6 +17,7 @@
 #ifdef HAVE_PTRAUTH
 # include <ptrauth.h>
 #endif
+#include <glib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -112,6 +113,8 @@ static gboolean gum_android_query_mapping (gconstpointer address,
     guint8 ** start, gsize * size, GumPageProtection * prot);
 static GumPageProtection gum_android_perms_to_prot (const gchar * perms);
 static gboolean gum_android_restore_regions (GArray * regions);
+static const gchar * gum_android_prot_to_string (GumPageProtection prot,
+    gchar buf[4]);
 #endif
 
 static void gum_memory_scan_raw (const GumMemoryRange * range,
@@ -391,6 +394,8 @@ gum_android_query_mapping (gconstpointer address,
     if ((const guint8 *) address >= (const guint8 *) start_ptr &&
         (const guint8 *) address < (const guint8 *) end_ptr)
     {
+      gchar prot_str[4];
+
       if (start != NULL)
         *start = start_ptr;
       if (size != NULL)
@@ -400,6 +405,11 @@ gum_android_query_mapping (gconstpointer address,
         *prot = gum_android_perms_to_prot (perms);
 
       success = TRUE;
+
+      g_message ("[gum-android] mapping found for %p: start=%p size=%"
+          G_GSIZE_FORMAT " prot=%s", address, start_ptr,
+          (gsize) ((const guint8 *) end_ptr - (const guint8 *) start_ptr),
+          gum_android_prot_to_string (*prot, prot_str));
     }
   }
 
@@ -424,15 +434,40 @@ gum_android_restore_regions (GArray * regions)
     if (!region->prot_changed)
       continue;
 
+    {
+      gchar prot_str[4];
+      g_message ("[gum-android] restoring region start=%p size=%"
+          G_GSIZE_FORMAT " prot=%s", region->start, region->size,
+          gum_android_prot_to_string (region->restore_prot, prot_str));
+    }
+
     if (!gum_try_mprotect (region->start, region->size, region->restore_prot))
     {
       success = FALSE;
+      {
+        gchar prot_str[4];
+        g_warning ("[gum-android] failed to restore region start=%p size=%"
+            G_GSIZE_FORMAT " prot=%s", region->start, region->size,
+            gum_android_prot_to_string (region->restore_prot, prot_str));
+      }
     }
 
     region->prot_changed = FALSE;
   }
 
   return success;
+}
+
+static const gchar *
+gum_android_prot_to_string (GumPageProtection prot,
+                            gchar buf[4])
+{
+  buf[0] = (prot & GUM_PAGE_READ) != 0 ? 'r' : '-';
+  buf[1] = (prot & GUM_PAGE_WRITE) != 0 ? 'w' : '-';
+  buf[2] = (prot & GUM_PAGE_EXECUTE) != 0 ? 'x' : '-';
+  buf[3] = '\0';
+
+  return buf;
 }
 #endif
 
@@ -633,6 +668,8 @@ cleanup:
           {
             g_array_unref (android_regions);
             android_regions = NULL;
+              g_warning ("[gum-android] failed to query mapping for %p",
+                  target_page);
             break;
           }
 
@@ -654,6 +691,7 @@ cleanup:
           if (!already_added)
           {
             GumAndroidRegion region_info;
+            gchar orig_str[4], restore_str[4];
 
             region_info.start = region_start;
             region_info.size = region_size;
@@ -664,11 +702,23 @@ cleanup:
             region_info.prot_changed = FALSE;
 
             g_array_append_val (android_regions, region_info);
+
+            g_message ("[gum-android] tracked region start=%p size=%"
+                G_GSIZE_FORMAT " orig=%s restore=%s",
+                region_info.start, region_info.size,
+                gum_android_prot_to_string (region_info.original_prot,
+                    orig_str),
+                gum_android_prot_to_string (region_info.restore_prot,
+                    restore_str));
           }
         }
 
         if (android_regions != NULL)
+        {
           android_use_regions = TRUE;
+          g_message ("[gum-android] using aggregated region updates "
+              "(count=%u)", android_regions->len);
+        }
       }
 #endif
 
@@ -684,6 +734,13 @@ cleanup:
               &g_array_index (android_regions, GumAndroidRegion, region_index);
           GumPageProtection desired =
               region->restore_prot | GUM_PAGE_WRITE;
+          gchar desired_str[4], restore_str[4];
+
+          g_message ("[gum-android] mprotect region start=%p size=%"
+              G_GSIZE_FORMAT " desired=%s restore=%s",
+              region->start, region->size,
+              gum_android_prot_to_string (desired, desired_str),
+              gum_android_prot_to_string (region->restore_prot, restore_str));
 
           if (desired != region->restore_prot)
           {
@@ -704,6 +761,16 @@ cleanup:
         for (i = 0; i != sorted_addresses->len; i++)
         {
           gpointer target_page = g_ptr_array_index (sorted_addresses, i);
+
+#ifdef HAVE_ANDROID
+          if (rwx_supported)
+          {
+            gchar prot_str[4];
+            g_message ("[gum-android] mprotect fallback page start=%p size=%"
+                G_GSIZE_FORMAT " desired=%s", target_page, page_size,
+                gum_android_prot_to_string (protection, prot_str));
+          }
+#endif
 
           if (!gum_try_mprotect (target_page, page_size, protection))
           {
@@ -812,7 +879,10 @@ resume_threads:
 
 #ifdef HAVE_ANDROID
       if (android_regions != NULL)
+      {
+        g_message ("[gum-android] releasing region tracking data");
         g_array_unref (android_regions);
+      }
 #endif
   }
   else
