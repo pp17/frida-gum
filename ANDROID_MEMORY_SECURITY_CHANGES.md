@@ -92,25 +92,35 @@
 #endif
 ```
 
-### 4. gum/backend-arm64/gumstalker-arm64.c
+### 4. gum/backend-arm64/gumstalker-arm64.c, gum/backend-arm/gumstalker-arm.c, gum/backend-x86/gumstalker-x86.c
 
-**修改**: Stalker 代码和数据分配
+**修改**: Stalker RWX 支持禁用
 
-在 Android 上，Stalker 现在：
-- 为执行上下文分配 RW 内存（而不是 RWX）
-- 为代码 slab 分配 RW 内存（而不是 RWX）
-- 数据 slab 仍然使用 RW（因为不需要执行权限）
+在 Android 上，Stalker 现在强制禁用 RWX 支持。这确保：
+- 代码在写入时使用 RW 权限
+- 代码在执行时自动切换为 RX 权限（通过 `gum_stalker_freeze()`）
+- 永远不会有 RWX 页面
+
+**关键修改**：在 `gum_stalker_init()` 中强制设置 `is_rwx_supported = FALSE`
 
 ```c
 #ifdef HAVE_ANDROID
-  /* On Android, never allocate RWX for Stalker. Use RW, then switch to RX. */
-  base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
-      GUM_PAGE_RW);
+  /*
+   * On Android, force disable RWX support to ensure proper RW/RX switching.
+   * This is safer and avoids detection by security mechanisms.
+   */
+  self->is_rwx_supported = FALSE;
 #else
-  base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
-      stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+  self->is_rwx_supported = gum_query_rwx_support () != GUM_RWX_NONE;
 #endif
 ```
+
+**工作原理**：
+- 当 `is_rwx_supported = FALSE` 时：
+  - 内存分配使用 RW 权限
+  - `gum_stalker_thaw()` 确保代码可写（RW）
+  - `gum_stalker_freeze()` 将代码切换为可执行（RX）
+- 这种机制自动处理 RW ↔ RX 切换，无需手动干预
 
 ## 安全优势
 

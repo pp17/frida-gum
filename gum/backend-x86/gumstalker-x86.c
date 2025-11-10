@@ -953,7 +953,15 @@ gum_stalker_init (GumStalker * self)
 
   self->page_size = page_size;
   self->cpu_features = gum_query_cpu_features ();
+#ifdef HAVE_ANDROID
+  /*
+   * On Android, force disable RWX support to ensure proper RW/RX switching.
+   * This is safer and avoids detection by security mechanisms.
+   */
+  self->is_rwx_supported = FALSE;
+#else
   self->is_rwx_supported = gum_query_rwx_support () != GUM_RWX_NONE;
+#endif
 
   g_mutex_init (&self->mutex);
   self->contexts = NULL;

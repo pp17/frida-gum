@@ -866,7 +866,15 @@ gum_stalker_init (GumStalker * self)
 
   self->page_size = page_size;
   self->cpu_features = gum_query_cpu_features ();
+#ifdef HAVE_ANDROID
+  /*
+   * On Android, force disable RWX support to ensure proper RW/RX switching.
+   * This is safer and avoids detection by security mechanisms.
+   */
+  self->is_rwx_supported = FALSE;
+#else
   self->is_rwx_supported = gum_query_rwx_support () != GUM_RWX_NONE;
+#endif
 
   g_mutex_init (&self->mutex);
   self->contexts = NULL;
@@ -2099,14 +2107,7 @@ gum_stalker_thaw (GumStalker * self,
     return;
 
   if (!self->is_rwx_supported)
-  {
-#ifdef HAVE_ANDROID
-    /* On Android, use RW for modifying code */
     gum_mprotect (code, size, GUM_PAGE_RW);
-#else
-    gum_mprotect (code, size, GUM_PAGE_RW);
-#endif
-  }
 }
 
 static void
@@ -2166,15 +2167,8 @@ gum_exec_ctx_new (GumStalker * stalker,
   // base = gum_memory_allocate (base + INT32_MAX / 2, stalker->ctx_size, stalker->page_size,
   //     stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   // g_warning("target base: %p, real base %p:",base + INT32_MAX / 2,base);
-  
-#ifdef HAVE_ANDROID
-  /* On Android, never allocate RWX for Stalker. Use RW, then switch to RX. */
-  base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
-      GUM_PAGE_RW);
-#else
   base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
       stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
-#endif
 
   ctx = (GumExecCtx *) base;
 
@@ -5780,14 +5774,8 @@ gum_code_slab_new (GumExecCtx * ctx)
 
   gum_exec_ctx_compute_code_address_spec (ctx, total_size, &spec);
 
-#ifdef HAVE_ANDROID
-  /* On Android, never allocate RWX for Stalker code slabs. Use RW, then switch to RX. */
-  code_slab = gum_memory_allocate_near (&spec, total_size, stalker->page_size,
-      GUM_PAGE_RW);
-#else
   code_slab = gum_memory_allocate_near (&spec, total_size, stalker->page_size,
       stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
-#endif
   if (code_slab == NULL)
   {
     g_error ("Unable to allocate code slab near %p with max_distance=%zu",
