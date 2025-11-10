@@ -98,6 +98,7 @@ struct _GumAndroidRegion
   guint8 * start;
   gsize size;
   GumPageProtection original_prot;
+  GumPageProtection restore_prot;
   gboolean prot_changed;
 };
 #endif
@@ -423,7 +424,7 @@ gum_android_restore_regions (GArray * regions)
     if (!region->prot_changed)
       continue;
 
-    if (!gum_try_mprotect (region->start, region->size, region->original_prot))
+    if (!gum_try_mprotect (region->start, region->size, region->restore_prot))
     {
       success = FALSE;
     }
@@ -657,6 +658,9 @@ cleanup:
             region_info.start = region_start;
             region_info.size = region_size;
             region_info.original_prot = region_prot;
+            region_info.restore_prot = region_prot;
+            if ((region_info.restore_prot & GUM_PAGE_EXECUTE) == 0)
+              region_info.restore_prot |= GUM_PAGE_EXECUTE;
             region_info.prot_changed = FALSE;
 
             g_array_append_val (android_regions, region_info);
@@ -678,9 +682,10 @@ cleanup:
         {
           GumAndroidRegion * region =
               &g_array_index (android_regions, GumAndroidRegion, region_index);
-          GumPageProtection desired = region->original_prot | GUM_PAGE_WRITE;
+          GumPageProtection desired =
+              region->restore_prot | GUM_PAGE_WRITE;
 
-          if (desired != region->original_prot)
+          if (desired != region->restore_prot)
           {
             if (!gum_try_mprotect (region->start, region->size, desired))
             {
