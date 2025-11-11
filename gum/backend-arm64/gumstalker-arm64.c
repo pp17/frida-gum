@@ -104,6 +104,7 @@ enum
 {
   PROP_0,
   PROP_IC_ENTRIES,
+  PROP_POOL_SIZE,
 };
 
 struct _GumStalker
@@ -111,6 +112,7 @@ struct _GumStalker
   GObject parent;
 
   guint ic_entries;
+  gsize pool_size;
 
   gsize ctx_size;
   gsize ctx_header_size;
@@ -828,6 +830,13 @@ gum_stalker_class_init (GumStalkerClass * klass)
       2, 32, 2, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
       G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (object_class, PROP_POOL_SIZE,
+      g_param_spec_uint64 ("pool-size", "Pool Size", 
+      "Memory pool size in bytes (default 200MB)",
+      1024 * 1024, G_MAXUINT64, 200 * 1024 * 1024,
+      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+      G_PARAM_STATIC_STRINGS));
+
   gum_unfollow_me_address = gum_strip_code_pointer (gum_stalker_unfollow_me);
   gum_deactivate_address = gum_strip_code_pointer (gum_stalker_deactivate);
   gum_thread_exit_address = gum_find_thread_exit_implementation ();
@@ -846,8 +855,11 @@ gum_stalker_init (GumStalker * self)
   self->probe_array_by_address = g_hash_table_new_full (NULL, NULL, NULL,
       (GDestroyNotify) g_ptr_array_unref);
 
-  /* Create memory pool (200MB default) */
-  self->memory_pool = gum_stalker_memory_pool_new (200 * 1024 * 1024);
+  /* Create memory pool (use pool_size property, default 200MB if not set) */
+  if (self->pool_size == 0)
+    self->pool_size = 200 * 1024 * 1024;
+  
+  self->memory_pool = gum_stalker_memory_pool_new (self->pool_size);
   if (self->memory_pool == NULL)
     g_error ("Failed to create stalker memory pool");
 
@@ -1145,6 +1157,9 @@ gum_stalker_get_property (GObject * object,
     case PROP_IC_ENTRIES:
       g_value_set_uint (value, self->ic_entries);
       break;
+    case PROP_POOL_SIZE:
+      g_value_set_uint64 (value, self->pool_size);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
   }
@@ -1163,6 +1178,9 @@ gum_stalker_set_property (GObject * object,
     case PROP_IC_ENTRIES:
       self->ic_entries = g_value_get_uint (value);
       break;
+    case PROP_POOL_SIZE:
+      self->pool_size = g_value_get_uint64 (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
   }
@@ -1172,6 +1190,16 @@ GumStalker *
 gum_stalker_new (void)
 {
   return g_object_new (GUM_TYPE_STALKER, NULL);
+}
+
+GumStalker *
+gum_stalker_new_with_params (guint ic_entries,
+                              gsize pool_size)
+{
+  return g_object_new (GUM_TYPE_STALKER,
+      "ic-entries", ic_entries,
+      "pool-size", pool_size,
+      NULL);
 }
 
 void
