@@ -76,6 +76,8 @@ typedef struct _GumSlowSlab GumSlowSlab;
 typedef struct _GumDataSlab GumDataSlab;
 typedef struct _GumSlab GumSlab;
 
+typedef struct _GumStalkerMemoryPool GumStalkerMemoryPool;
+
 typedef guint GumPrologType;
 typedef guint GumCodeContext;
 typedef struct _GumGeneratorContext GumGeneratorContext;
@@ -161,6 +163,8 @@ struct _GumStalker
   GHashTable * probe_array_by_address;
 
   GumExceptor * exceptor;
+  
+  GumStalkerMemoryPool * memory_pool;
 };
 
 struct _GumInfectContext
@@ -336,6 +340,14 @@ struct _GumSlowSlab
 struct _GumDataSlab
 {
   GumSlab slab;
+};
+
+struct _GumStalkerMemoryPool
+{
+  gpointer base_address;
+  gsize total_size;
+  gsize used_size;
+  GMutex mutex;
 };
 
 enum _GumPrologType
@@ -768,6 +780,11 @@ static gpointer gum_slab_cursor (GumSlab * self);
 static gpointer gum_slab_reserve (GumSlab * self, gsize size);
 static gpointer gum_slab_try_reserve (GumSlab * self, gsize size);
 
+static GumStalkerMemoryPool * gum_stalker_memory_pool_new (gsize size);
+static void gum_stalker_memory_pool_free (GumStalkerMemoryPool * pool);
+static gpointer gum_stalker_memory_pool_allocate (GumStalkerMemoryPool * pool,
+    gsize size, gsize alignment, GumPageProtection prot);
+
 static gpointer gum_find_thread_exit_implementation (void);
 
 G_DEFINE_TYPE (GumStalker, gum_stalker, G_TYPE_OBJECT)
@@ -828,6 +845,11 @@ gum_stalker_init (GumStalker * self)
   self->probe_target_by_id = g_hash_table_new_full (NULL, NULL, NULL, NULL);
   self->probe_array_by_address = g_hash_table_new_full (NULL, NULL, NULL,
       (GDestroyNotify) g_ptr_array_unref);
+
+  /* Create memory pool (200MB default) */
+  self->memory_pool = gum_stalker_memory_pool_new (200 * 1024 * 1024);
+  if (self->memory_pool == NULL)
+    g_error ("Failed to create stalker memory pool");
 
   page_size = gum_query_page_size ();
 
@@ -1086,6 +1108,10 @@ gum_stalker_finalize (GObject * object)
 
   g_assert (self->contexts == NULL);
   g_mutex_clear (&self->mutex);
+
+  /* Free memory pool */
+  gum_stalker_memory_pool_free (self->memory_pool);
+  self->memory_pool = NULL;
 
   G_OBJECT_CLASS (gum_stalker_parent_class)->finalize (object);
 }
@@ -2153,14 +2179,13 @@ gum_exec_ctx_new (GumStalker * stalker,
   GumCodeSlab * code_slab;
   GumSlowSlab * slow_slab;
   GumDataSlab * data_slab;
-  // base = gum_memory_allocate (NULL, INT32_MAX, stalker->page_size, GUM_PAGE_RW);
-  // g_warning("Alloc big memory at base %p:",base);
-  // gum_memory_free(base,INT32_MAX);
-  // base = gum_memory_allocate (base + INT32_MAX / 2, stalker->ctx_size, stalker->page_size,
-  //     stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
-  // g_warning("target base: %p, real base %p:",base + INT32_MAX / 2,base);
-  base = gum_memory_allocate (NULL, stalker->ctx_size, stalker->page_size,
+
+  /* Allocate from memory pool */
+  base = gum_stalker_memory_pool_allocate (stalker->memory_pool,
+      stalker->ctx_size, stalker->page_size,
       stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
+  if (base == NULL)
+    g_error ("Failed to allocate exec context from memory pool");
 
   ctx = (GumExecCtx *) base;
 
@@ -2229,26 +2254,10 @@ static void
 gum_exec_ctx_free (GumExecCtx * ctx)
 {
   GumStalker * stalker = ctx->stalker;
-  GumDataSlab * data_slab;
-  GumCodeSlab * code_slab;
 
   gum_metal_hash_table_unref (ctx->mappings);
 
-  data_slab = ctx->data_slab;
-  while (data_slab != NULL)
-  {
-    GumDataSlab * next = (GumDataSlab *) data_slab->slab.next;
-    gum_data_slab_free (data_slab);
-    data_slab = next;
-  }
-
-  code_slab = ctx->code_slab;
-  while (code_slab != NULL)
-  {
-    GumCodeSlab * next = (GumCodeSlab *) code_slab->slab.next;
-    gum_code_slab_free (code_slab);
-    code_slab = next;
-  }
+  /* No need to free individual slabs - they're in the memory pool */
 
   g_object_unref (ctx->sink);
   g_object_unref (ctx->transformer);
@@ -2260,7 +2269,7 @@ gum_exec_ctx_free (GumExecCtx * ctx)
 
   g_object_unref (stalker);
 
-  gum_memory_free (ctx, stalker->ctx_size);
+  /* No need to free ctx - it's in the memory pool */
 }
 
 static void
@@ -5764,15 +5773,12 @@ gum_code_slab_new (GumExecCtx * ctx)
   total_size = stalker->code_slab_size_dynamic +
       stalker->slow_slab_size_dynamic;
 
-  gum_exec_ctx_compute_code_address_spec (ctx, total_size, &spec);
-
-  code_slab = gum_memory_allocate_near (&spec, total_size, stalker->page_size,
+  /* Allocate from memory pool */
+  code_slab = gum_stalker_memory_pool_allocate (stalker->memory_pool,
+      total_size, stalker->page_size,
       stalker->is_rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW);
   if (code_slab == NULL)
-  {
-    g_error ("Unable to allocate code slab near %p with max_distance=%zu",
-        spec.near_address, spec.max_distance);
-  }
+    g_error ("Unable to allocate code slab from memory pool");
 
   gum_code_slab_init (code_slab, stalker->code_slab_size_dynamic, total_size,
       stalker->page_size);
@@ -5830,17 +5836,12 @@ gum_data_slab_new (GumExecCtx * ctx)
   GumDataSlab * slab;
   GumStalker * stalker = ctx->stalker;
   const gsize slab_size = stalker->data_slab_size_dynamic;
-  GumAddressSpec spec;
 
-  gum_exec_ctx_compute_data_address_spec (ctx, slab_size, &spec);
-
-  slab = gum_memory_allocate_near (&spec, slab_size, stalker->page_size,
-      GUM_PAGE_RW);
+  /* Allocate from memory pool */
+  slab = gum_stalker_memory_pool_allocate (stalker->memory_pool,
+      slab_size, stalker->page_size, GUM_PAGE_RW);
   if (slab == NULL)
-  {
-    g_error ("Unable to allocate data slab near %p with max_distance=%zu",
-        spec.near_address, spec.max_distance);
-  }
+    g_error ("Unable to allocate data slab from memory pool");
 
   gum_data_slab_init (slab, slab_size, slab_size);
 
@@ -5944,6 +5945,84 @@ gum_slab_try_reserve (GumSlab * self,
   self->offset += size;
 
   return cursor;
+}
+
+static GumStalkerMemoryPool *
+gum_stalker_memory_pool_new (gsize size)
+{
+  GumStalkerMemoryPool * pool;
+  gsize page_size;
+
+  pool = g_new0 (GumStalkerMemoryPool, 1);
+  
+  page_size = gum_query_page_size ();
+  pool->total_size = GUM_ALIGN_SIZE (size, page_size);
+  pool->used_size = 0;
+  
+  /* Allocate the memory pool */
+  pool->base_address = gum_memory_allocate (NULL, pool->total_size, page_size,
+      GUM_PAGE_RWX);
+  if (pool->base_address == NULL)
+  {
+    g_free (pool);
+    return NULL;
+  }
+  
+  g_mutex_init (&pool->mutex);
+  
+  return pool;
+}
+
+static void
+gum_stalker_memory_pool_free (GumStalkerMemoryPool * pool)
+{
+  if (pool == NULL)
+    return;
+  
+  if (pool->base_address != NULL)
+    gum_memory_free (pool->base_address, pool->total_size);
+  
+  g_mutex_clear (&pool->mutex);
+  g_free (pool);
+}
+
+static gpointer
+gum_stalker_memory_pool_allocate (GumStalkerMemoryPool * pool,
+                                   gsize size,
+                                   gsize alignment,
+                                   GumPageProtection prot)
+{
+  gpointer result;
+  gsize aligned_offset;
+  gsize aligned_size;
+  
+  if (pool == NULL)
+    return NULL;
+  
+  g_mutex_lock (&pool->mutex);
+  
+  /* Align the current offset */
+  aligned_offset = GUM_ALIGN_SIZE (pool->used_size, alignment);
+  aligned_size = GUM_ALIGN_SIZE (size, alignment);
+  
+  /* Check if we have enough space */
+  if (aligned_offset + aligned_size > pool->total_size)
+  {
+    g_mutex_unlock (&pool->mutex);
+    return NULL;
+  }
+  
+  /* Allocate from the pool */
+  result = (guint8 *) pool->base_address + aligned_offset;
+  pool->used_size = aligned_offset + aligned_size;
+  
+  g_mutex_unlock (&pool->mutex);
+  
+  /* Apply memory protection if needed */
+  if (prot != GUM_PAGE_RWX)
+    gum_mprotect (result, aligned_size, prot);
+  
+  return result;
 }
 
 static gpointer
