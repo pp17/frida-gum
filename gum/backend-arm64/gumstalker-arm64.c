@@ -1109,6 +1109,22 @@ gum_stalker_finalize (GObject * object)
   g_assert (self->contexts == NULL);
   g_mutex_clear (&self->mutex);
 
+  /* Print memory pool usage statistics */
+  if (self->memory_pool != NULL)
+  {
+    gsize used_mb = self->memory_pool->used_size / (1024 * 1024);
+    gsize total_mb = self->memory_pool->total_size / (1024 * 1024);
+    gsize used_bytes = self->memory_pool->used_size % (1024 * 1024);
+    gdouble usage_percent = (self->memory_pool->used_size * 100.0) / 
+        self->memory_pool->total_size;
+    
+    g_info ("Stalker memory pool statistics:");
+    g_info ("  Total size: %zu MB", total_mb);
+    g_info ("  Used: %zu MB + %zu bytes (%.2f%%)", used_mb, used_bytes, usage_percent);
+    g_info ("  Wasted: %zu bytes", 
+        self->memory_pool->total_size - self->memory_pool->used_size);
+  }
+
   /* Free memory pool */
   gum_stalker_memory_pool_free (self->memory_pool);
   self->memory_pool = NULL;
