@@ -99,6 +99,7 @@ struct _GumAndroidRegion
   guint8 * start;
   gsize size;
   GumPageProtection original_prot;
+  GumPageProtection current_prot;
   GumPageProtection restore_prot;
   gboolean prot_changed;
 };
@@ -431,14 +432,17 @@ gum_android_restore_regions (GArray * regions)
   {
     GumAndroidRegion * region = &g_array_index (regions, GumAndroidRegion, idx);
 
-    if (!region->prot_changed)
+    if (!region->prot_changed &&
+        region->current_prot == region->restore_prot)
       continue;
 
     {
-      gchar prot_str[4];
+      gchar cur_str[4], restore_str[4];
       g_message ("[gum-android] restoring region start=%p size=%"
-          G_GSIZE_FORMAT " prot=%s", region->start, region->size,
-          gum_android_prot_to_string (region->restore_prot, prot_str));
+          G_GSIZE_FORMAT " current=%s restore=%s",
+          region->start, region->size,
+          gum_android_prot_to_string (region->current_prot, cur_str),
+          gum_android_prot_to_string (region->restore_prot, restore_str));
     }
 
     if (!gum_try_mprotect (region->start, region->size, region->restore_prot))
@@ -450,6 +454,10 @@ gum_android_restore_regions (GArray * regions)
             G_GSIZE_FORMAT " prot=%s", region->start, region->size,
             gum_android_prot_to_string (region->restore_prot, prot_str));
       }
+    }
+    else
+    {
+      region->current_prot = region->restore_prot;
     }
 
     region->prot_changed = FALSE;
@@ -696,9 +704,16 @@ cleanup:
             region_info.start = region_start;
             region_info.size = region_size;
             region_info.original_prot = region_prot;
-            region_info.restore_prot = region_prot;
-            if ((region_info.restore_prot & GUM_PAGE_EXECUTE) == 0)
-              region_info.restore_prot |= GUM_PAGE_EXECUTE;
+            region_info.current_prot = region_prot;
+            if ((region_prot & GUM_PAGE_EXECUTE) != 0)
+            {
+              region_info.restore_prot = region_prot;
+            }
+            else
+            {
+              region_info.restore_prot =
+                  (region_prot & ~GUM_PAGE_WRITE) | GUM_PAGE_EXECUTE;
+            }
             region_info.prot_changed = FALSE;
 
             g_array_append_val (android_regions, region_info);
@@ -732,26 +747,33 @@ cleanup:
         {
           GumAndroidRegion * region =
               &g_array_index (android_regions, GumAndroidRegion, region_index);
-          GumPageProtection desired =
-              region->restore_prot | GUM_PAGE_WRITE;
-          gchar desired_str[4], restore_str[4];
+          GumPageProtection desired = region->current_prot | GUM_PAGE_WRITE;
+          gchar desired_str[4], current_str[4];
 
-          g_message ("[gum-android] mprotect region start=%p size=%"
-              G_GSIZE_FORMAT " desired=%s restore=%s",
-              region->start, region->size,
-              gum_android_prot_to_string (desired, desired_str),
-              gum_android_prot_to_string (region->restore_prot, restore_str));
+          if ((desired & GUM_PAGE_EXECUTE) == 0)
+            desired |= GUM_PAGE_EXECUTE;
 
-          if (desired != region->restore_prot)
+          if (desired != region->current_prot)
           {
+            g_message ("[gum-android] mprotect region start=%p size=%"
+                G_GSIZE_FORMAT " current=%s desired=%s",
+                region->start, region->size,
+                gum_android_prot_to_string (region->current_prot, current_str),
+                gum_android_prot_to_string (desired, desired_str));
+
             if (!gum_try_mprotect (region->start, region->size, desired))
             {
+              g_warning ("[gum-android] failed to mprotect region start=%p "
+                  "size=%" G_GSIZE_FORMAT " desired=%s",
+                  region->start, region->size,
+                  gum_android_prot_to_string (desired, desired_str));
               result = FALSE;
               gum_android_restore_regions (android_regions);
               goto resume_threads;
             }
 
             region->prot_changed = TRUE;
+            region->current_prot = desired;
           }
         }
       }
