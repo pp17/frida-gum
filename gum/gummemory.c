@@ -957,10 +957,6 @@ gum_ensure_code_readable (gconstpointer address,
       }
       else
       {
-        g_info ("gum_ensure_code_readable: skipping page %p - file_backed=%s, has_execute=%s",
-            cur_page,
-            ctx.is_file_backed ? "YES" : "NO",
-            ctx.has_execute_permission ? "YES" : "NO");
         /* Track the page but don't modify it */
         g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
       }
