@@ -1062,21 +1062,15 @@ gum_interceptor_transaction_end (GumInterceptorTransaction * self)
         }
       }
 
-      if (!rwx_supported)
+      /*
+       * Restore memory protection to RX for better security.
+       * This ensures that code pages don't remain writable after hooking.
+       */
+      for (cur = addresses; cur != NULL; cur = cur->next)
       {
-        /*
-         * We don't bother restoring the protection on RWX systems, as we would
-         * have to determine the old protection to be able to do so safely.
-         *
-         * While we could easily do that, it would add overhead, but it's not
-         * really clear that it would have any tangible upsides.
-         */
-        for (cur = addresses; cur != NULL; cur = cur->next)
-        {
-          gpointer target_page = cur->data;
+        gpointer target_page = cur->data;
 
-          gum_mprotect (target_page, page_size, GUM_PAGE_RX);
-        }
+        gum_mprotect (target_page, page_size, GUM_PAGE_RX);
       }
 
       for (cur = addresses; cur != NULL; cur = cur->next)
