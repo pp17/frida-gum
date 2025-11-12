@@ -94,6 +94,8 @@ static guint gum_cached_page_size;
 #ifdef HAVE_ANDROID
 G_LOCK_DEFINE_STATIC (gum_softened_code_pages);
 static GHashTable * gum_softened_code_pages;
+
+static gboolean gum_ensure_code_readable_filter_enabled = FALSE;
 #endif
 
 G_DEFINE_BOXED_TYPE (GumMatchPattern, gum_match_pattern, gum_match_pattern_ref,
@@ -936,22 +938,28 @@ gum_ensure_code_readable (gconstpointer address,
       ctx.found = FALSE;
       gum_check_memory_properties_from_maps (cur_page, &ctx);
 
-      /* Skip if page is file-backed (system libraries, etc.) */
-      if (ctx.is_file_backed)
+      /* Apply filtering logic only if enabled */
+      if (gum_ensure_code_readable_filter_enabled)
       {
-        should_modify = FALSE;
-      }
-      /* Skip if page already has execute permission */
-      else if (ctx.has_execute_permission)
-      {
-        should_modify = FALSE;
+        /* Skip if page is file-backed (system libraries, etc.) */
+        if (ctx.is_file_backed)
+        {
+          should_modify = FALSE;
+        }
+        /* Skip if page already has execute permission */
+        else if (ctx.has_execute_permission)
+        {
+          should_modify = FALSE;
+        }
       }
 
       if (should_modify)
       {
-        /* Only modify protection if page is not file-backed and doesn't have execute permission */
-        g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - anonymous memory without execute permission",
-            cur_page, page_size);
+        const gchar * reason = gum_ensure_code_readable_filter_enabled ?
+            "anonymous memory without execute permission (filtered)" :
+            "memory (filter disabled)";
+        g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - %s",
+            cur_page, page_size, reason);
         if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
           g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
       }
@@ -977,6 +985,14 @@ gum_mprotect (gpointer address,
     success = gum_try_mprotect (address, size, prot);
   if (!success)
     g_abort ();
+}
+
+void
+gum_set_ensure_code_readable_filter_enabled (gboolean enabled)
+{
+#ifdef HAVE_ANDROID
+  gum_ensure_code_readable_filter_enabled = enabled;
+#endif
 }
 
 #ifndef GUM_USE_SYSTEM_ALLOC
