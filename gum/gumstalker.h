@@ -161,6 +161,14 @@ GUM_API gboolean gum_stalker_is_supported (void);
 GUM_API void gum_stalker_activate_experimental_unwind_support (void);
 
 GUM_API GumStalker * gum_stalker_new (void);
+#if defined(__aarch64__) && defined(__ANDROID__)
+/* Creates a new GumStalker instance with custom parameters
+ * @param ic_entries: Number of inline cache entries (2-32, default: 2)
+ * @param pool_size: Memory pool size in bytes (min: 1MB, default: 200MB, 200 * 1024 * 1024)
+ */
+GUM_API GumStalker * gum_stalker_new_with_params (guint ic_entries,
+    gsize pool_size);
+#endif
 
 GUM_API void gum_stalker_exclude (GumStalker * self,
     const GumMemoryRange * range);

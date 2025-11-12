@@ -94,6 +94,8 @@ static guint gum_cached_page_size;
 #ifdef HAVE_ANDROID
 G_LOCK_DEFINE_STATIC (gum_softened_code_pages);
 static GHashTable * gum_softened_code_pages;
+
+static gboolean gum_ensure_code_readable_filter_enabled = FALSE;
 #endif
 
 G_DEFINE_BOXED_TYPE (GumMatchPattern, gum_match_pattern, gum_match_pattern_ref,
@@ -829,6 +831,74 @@ gum_match_token_append_with_mask (GumMatchToken * self,
   g_array_append_val (self->masks, mask);
 }
 
+#ifdef HAVE_ANDROID
+
+typedef struct _GumEnsureCodeReadableContext {
+  gconstpointer target_address;
+  gboolean is_file_backed;
+  gboolean has_execute_permission;
+  gboolean found;
+} GumEnsureCodeReadableContext;
+
+static gboolean
+gum_parse_memory_maps_for_address (const gchar * line,
+                                      gpointer user_data)
+{
+  GumEnsureCodeReadableContext * ctx = user_data;
+  GumAddress target = GUM_ADDRESS (ctx->target_address);
+  GumAddress range_start, range_end;
+  char perms[8] = {0};
+  unsigned long offset, device_major, device_minor, inode;
+  char pathname[PATH_MAX] = {0};
+
+  /* Parse: 7b6c7e5000-7b6c7ea000 rwxp 00021000 fe:06 2157 /system/lib64/lib.so */
+  int items = sscanf (line, "%lx-%lx %7s %lx %lx:%lx %lu %s",
+                      &range_start, &range_end, perms,
+                      &offset, &device_major, &device_minor, &inode,
+                      pathname);
+
+  if (items < 7)  /* At least the first 7 fields should be present */
+    return TRUE; /* Skip invalid lines */
+
+  /* Check if our target address is in this range */
+  if (target >= range_start && target < range_end)
+  {
+    ctx->has_execute_permission = (strchr (perms, 'x') != NULL);
+    ctx->is_file_backed = (items >= 8 && strlen (pathname) > 0);
+
+    ctx->found = TRUE;
+    return FALSE; /* Stop after finding our target */
+  }
+
+  return TRUE; /* Continue processing */
+}
+
+static void
+gum_check_memory_properties_from_maps (gconstpointer address,
+                                       GumEnsureCodeReadableContext * ctx)
+{
+  FILE * maps;
+  gchar line[1024];
+
+  ctx->is_file_backed = FALSE;
+  ctx->has_execute_permission = FALSE;
+  ctx->found = FALSE;
+
+  maps = fopen ("/proc/self/maps", "r");
+  if (maps == NULL)
+    return;
+
+  while (fgets (line, sizeof (line), maps) != NULL)
+  {
+    if (!gum_parse_memory_maps_for_address (line, ctx))
+      break;
+  }
+
+  fclose (maps);
+}
+
+#endif /* HAVE_ANDROID */
+
 void
 gum_ensure_code_readable (gconstpointer address,
                           gsize size)
@@ -843,27 +913,87 @@ gum_ensure_code_readable (gconstpointer address,
   if (gum_android_get_api_level () < 29)
     return;
 
-  page_size = gum_query_page_size ();
-  start_page = GSIZE_TO_POINTER (
-      GPOINTER_TO_SIZE (address) & ~(page_size - 1));
-  end_page = GSIZE_TO_POINTER (
-      GPOINTER_TO_SIZE (address + size - 1) & ~(page_size - 1)) + page_size;
-
-  G_LOCK (gum_softened_code_pages);
-
-  if (gum_softened_code_pages == NULL)
-    gum_softened_code_pages = g_hash_table_new (NULL, NULL);
-
-  for (cur_page = start_page; cur_page != end_page; cur_page += page_size)
+  if (gum_ensure_code_readable_filter_enabled)
   {
-    if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
-    {
-      if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
-        g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
-    }
-  }
+    /* Filtering enabled: check memory properties and apply filtering logic */
+    page_size = gum_query_page_size ();
+    start_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address) & ~(page_size - 1));
+    end_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address + size - 1) & ~(page_size - 1)) + page_size;
 
-  G_UNLOCK (gum_softened_code_pages);
+    G_LOCK (gum_softened_code_pages);
+
+    if (gum_softened_code_pages == NULL)
+      gum_softened_code_pages = g_hash_table_new (NULL, NULL);
+
+    for (cur_page = start_page; cur_page != end_page; cur_page += page_size)
+    {
+      if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
+      {
+        GumEnsureCodeReadableContext ctx;
+        gboolean should_modify = TRUE;
+
+        /* Check page properties using custom maps parsing */
+        ctx.target_address = cur_page;
+        ctx.is_file_backed = FALSE;
+        ctx.has_execute_permission = FALSE;
+        ctx.found = FALSE;
+        gum_check_memory_properties_from_maps (cur_page, &ctx);
+
+        /* Skip if page is file-backed (system libraries, etc.) */
+        if (ctx.is_file_backed)
+        {
+          should_modify = FALSE;
+        }
+        /* Skip if page already has execute permission */
+        else if (ctx.has_execute_permission)
+        {
+          should_modify = FALSE;
+        }
+
+        if (should_modify)
+        {
+          g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - anonymous memory without execute permission (filtered)",
+              cur_page, page_size);
+          if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
+            g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+        }
+        else
+        {
+          /* Track the page but don't modify it */
+          g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+        }
+      }
+    }
+
+    G_UNLOCK (gum_softened_code_pages);
+  }
+  else
+  {
+    /* Filtering disabled: use original logic without any modifications */
+    page_size = gum_query_page_size ();
+    start_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address) & ~(page_size - 1));
+    end_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address + size - 1) & ~(page_size - 1)) + page_size;
+
+    G_LOCK (gum_softened_code_pages);
+
+    if (gum_softened_code_pages == NULL)
+      gum_softened_code_pages = g_hash_table_new (NULL, NULL);
+
+    for (cur_page = start_page; cur_page != end_page; cur_page += page_size)
+    {
+      if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
+      {
+        if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
+          g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+      }
+    }
+
+    G_UNLOCK (gum_softened_code_pages);
+  }
 #endif
 }
 
@@ -874,9 +1004,17 @@ gum_mprotect (gpointer address,
 {
   gboolean success;
 
-  success = gum_try_mprotect (address, size, prot);
+    success = gum_try_mprotect (address, size, prot);
   if (!success)
     g_abort ();
+}
+
+void
+gum_set_ensure_code_readable_filter_enabled (gboolean enabled)
+{
+#ifdef HAVE_ANDROID
+  gum_ensure_code_readable_filter_enabled = enabled;
+#endif
 }
 
 #ifndef GUM_USE_SYSTEM_ALLOC
