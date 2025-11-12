@@ -857,8 +857,16 @@ gum_stalker_init (GumStalker * self)
 
   /* Create memory pool (use pool_size property, default 200MB if not set) */
   if (self->pool_size == 0)
+  {
     self->pool_size = 200 * 1024 * 1024;
-  
+    g_info ("gum_stalker_init: pool_size was 0, using default 200MB");
+  }
+  else
+  {
+    g_info ("gum_stalker_init: creating memory pool with size %zu bytes (%.1f MB)",
+        self->pool_size, (double)self->pool_size / (1024 * 1024));
+  }
+
   self->memory_pool = gum_stalker_memory_pool_new (self->pool_size);
   if (self->memory_pool == NULL)
     g_error ("Failed to create stalker memory pool");
@@ -1180,6 +1188,8 @@ gum_stalker_set_property (GObject * object,
       break;
     case PROP_POOL_SIZE:
       self->pool_size = g_value_get_uint64 (value);
+      g_info ("gum_stalker_set_property: PROP_POOL_SIZE set to %zu bytes (%.1f MB)",
+          self->pool_size, (double)self->pool_size / (1024 * 1024));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1196,6 +1206,9 @@ GumStalker *
 gum_stalker_new_with_params (guint ic_entries,
                               gsize pool_size)
 {
+  g_info ("gum_stalker_new_with_params called with ic_entries=%u, pool_size=%zu bytes (%.1f MB)",
+          ic_entries, pool_size, (double)pool_size / (1024 * 1024));
+
   return g_object_new (GUM_TYPE_STALKER,
       "ic-entries", ic_entries,
       "pool-size", pool_size,
