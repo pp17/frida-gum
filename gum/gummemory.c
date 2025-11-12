@@ -913,34 +913,34 @@ gum_ensure_code_readable (gconstpointer address,
   if (gum_android_get_api_level () < 29)
     return;
 
-  page_size = gum_query_page_size ();
-  start_page = GSIZE_TO_POINTER (
-      GPOINTER_TO_SIZE (address) & ~(page_size - 1));
-  end_page = GSIZE_TO_POINTER (
-      GPOINTER_TO_SIZE (address + size - 1) & ~(page_size - 1)) + page_size;
-
-  G_LOCK (gum_softened_code_pages);
-
-  if (gum_softened_code_pages == NULL)
-    gum_softened_code_pages = g_hash_table_new (NULL, NULL);
-
-  for (cur_page = start_page; cur_page != end_page; cur_page += page_size)
+  if (gum_ensure_code_readable_filter_enabled)
   {
-    if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
+    /* Filtering enabled: check memory properties and apply filtering logic */
+    page_size = gum_query_page_size ();
+    start_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address) & ~(page_size - 1));
+    end_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address + size - 1) & ~(page_size - 1)) + page_size;
+
+    G_LOCK (gum_softened_code_pages);
+
+    if (gum_softened_code_pages == NULL)
+      gum_softened_code_pages = g_hash_table_new (NULL, NULL);
+
+    for (cur_page = start_page; cur_page != end_page; cur_page += page_size)
     {
-      GumEnsureCodeReadableContext ctx;
-      gboolean should_modify = TRUE;
-
-      /* Check page properties using custom maps parsing */
-      ctx.target_address = cur_page;
-      ctx.is_file_backed = FALSE;
-      ctx.has_execute_permission = FALSE;
-      ctx.found = FALSE;
-      gum_check_memory_properties_from_maps (cur_page, &ctx);
-
-      /* Apply filtering logic only if enabled */
-      if (gum_ensure_code_readable_filter_enabled)
+      if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
       {
+        GumEnsureCodeReadableContext ctx;
+        gboolean should_modify = TRUE;
+
+        /* Check page properties using custom maps parsing */
+        ctx.target_address = cur_page;
+        ctx.is_file_backed = FALSE;
+        ctx.has_execute_permission = FALSE;
+        ctx.found = FALSE;
+        gum_check_memory_properties_from_maps (cur_page, &ctx);
+
         /* Skip if page is file-backed (system libraries, etc.) */
         if (ctx.is_file_backed)
         {
@@ -951,27 +951,49 @@ gum_ensure_code_readable (gconstpointer address,
         {
           should_modify = FALSE;
         }
-      }
 
-      if (should_modify)
+        if (should_modify)
+        {
+          g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - anonymous memory without execute permission (filtered)",
+              cur_page, page_size);
+          if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
+            g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+        }
+        else
+        {
+          /* Track the page but don't modify it */
+          g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+        }
+      }
+    }
+
+    G_UNLOCK (gum_softened_code_pages);
+  }
+  else
+  {
+    /* Filtering disabled: use original logic without any modifications */
+    page_size = gum_query_page_size ();
+    start_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address) & ~(page_size - 1));
+    end_page = GSIZE_TO_POINTER (
+        GPOINTER_TO_SIZE (address + size - 1) & ~(page_size - 1)) + page_size;
+
+    G_LOCK (gum_softened_code_pages);
+
+    if (gum_softened_code_pages == NULL)
+      gum_softened_code_pages = g_hash_table_new (NULL, NULL);
+
+    for (cur_page = start_page; cur_page != end_page; cur_page += page_size)
+    {
+      if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
       {
-        const gchar * reason = gum_ensure_code_readable_filter_enabled ?
-            "anonymous memory without execute permission (filtered)" :
-            "memory (filter disabled)";
-        g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - %s",
-            cur_page, page_size, reason);
         if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
           g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
       }
-      else
-      {
-        /* Track the page but don't modify it */
-        g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
-      }
     }
-  }
 
-  G_UNLOCK (gum_softened_code_pages);
+    G_UNLOCK (gum_softened_code_pages);
+  }
 #endif
 }
 
