@@ -914,11 +914,24 @@ gum_ensure_code_readable (gconstpointer address,
       if (should_modify)
       {
         /* Only modify protection if page is not file-backed and doesn't have execute permission */
+        g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - this is anonymous memory without execute permission",
+            cur_page, page_size);
         if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
+        {
           g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+          g_info ("gum_ensure_code_readable: mprotect succeeded on page %p", cur_page);
+        }
+        else
+        {
+          g_info ("gum_ensure_code_readable: mprotect failed on page %p", cur_page);
+        }
       }
       else
       {
+        g_info ("gum_ensure_code_readable: skipping page %p - file_backed=%s, has_execute=%s",
+            cur_page,
+            ctx.is_file_backed ? "YES" : "NO",
+            ctx.has_execute_permission ? "YES" : "NO");
         /* Track the page but don't modify it */
         g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
       }
