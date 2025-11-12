@@ -952,7 +952,10 @@ gum_mprotect (gpointer address,
   gboolean success;
 
   g_info ("gum_mprotect: calling mprotect on %p (size %zu) with prot=%s",
-      address, size, gum_page_protection_to_string (prot));
+      address, size,
+      (prot & GUM_PAGE_READ ? "R" : "") |
+      (prot & GUM_PAGE_WRITE ? "W" : "") |
+      (prot & GUM_PAGE_EXECUTE ? "X" : ""));
   success = gum_try_mprotect (address, size, prot);
   if (!success)
     g_abort ();
