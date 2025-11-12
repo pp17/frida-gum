@@ -829,6 +829,37 @@ gum_match_token_append_with_mask (GumMatchToken * self,
   g_array_append_val (self->masks, mask);
 }
 
+#ifdef HAVE_ANDROID
+
+typedef struct _GumEnsureCodeReadableContext {
+  gconstpointer target_address;
+  gboolean is_file_backed;
+  gboolean has_execute_permission;
+  gboolean found;
+} GumEnsureCodeReadableContext;
+
+static gboolean
+gum_check_if_range_is_file_backed (const GumRangeDetails * details,
+                                   gpointer user_data)
+{
+  GumEnsureCodeReadableContext * ctx = user_data;
+  GumAddress target = GUM_ADDRESS (ctx->target_address);
+  GumAddress range_start = details->range->base_address;
+  GumAddress range_end = range_start + details->range->size;
+
+  if (target >= range_start && target < range_end)
+  {
+    ctx->is_file_backed = (details->file != NULL) && (details->file->path != NULL);
+    ctx->has_execute_permission = (details->protection & GUM_PAGE_EXECUTE) != 0;
+    ctx->found = TRUE;
+    return TRUE; /* Stop enumeration once we found our target */
+  }
+
+  return FALSE; /* Continue enumeration */
+}
+
+#endif /* HAVE_ANDROID */
+
 void
 gum_ensure_code_readable (gconstpointer address,
                           gsize size)
@@ -858,8 +889,39 @@ gum_ensure_code_readable (gconstpointer address,
   {
     if (!g_hash_table_contains (gum_softened_code_pages, cur_page))
     {
-      if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
+      GumEnsureCodeReadableContext ctx;
+      gboolean should_modify = TRUE;
+
+      /* Check page properties in a single enumeration */
+      ctx.target_address = cur_page;
+      ctx.is_file_backed = FALSE;
+      ctx.has_execute_permission = FALSE;
+      ctx.found = FALSE;
+      gum_process_enumerate_ranges (GUM_PAGE_NO_ACCESS,
+          gum_check_if_range_is_file_backed, &ctx);
+
+      /* Skip if page is file-backed (system libraries, etc.) */
+      if (ctx.is_file_backed)
+      {
+        should_modify = FALSE;
+      }
+      /* Skip if page already has execute permission */
+      else if (ctx.has_execute_permission)
+      {
+        should_modify = FALSE;
+      }
+
+      if (should_modify)
+      {
+        /* Only modify protection if page is not file-backed and doesn't have execute permission */
+        if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
+          g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+      }
+      else
+      {
+        /* Track the page but don't modify it */
         g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
+      }
     }
   }
 
