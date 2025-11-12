@@ -523,6 +523,7 @@ static unsigned long gum_stalker_exception_get_ip (
 
 #endif
 
+static void gum_stalker_constructed (GObject * object);
 static void gum_stalker_dispose (GObject * object);
 static void gum_stalker_finalize (GObject * object);
 static void gum_stalker_get_property (GObject * object, guint property_id,
@@ -824,6 +825,7 @@ gum_stalker_class_init (GumStalkerClass * klass)
   object_class->finalize = gum_stalker_finalize;
   object_class->get_property = gum_stalker_get_property;
   object_class->set_property = gum_stalker_set_property;
+  object_class->constructed = gum_stalker_constructed;
 
   g_object_class_install_property (object_class, PROP_IC_ENTRIES,
       g_param_spec_uint ("ic-entries", "IC Entries", "Inline Cache Entries",
@@ -855,21 +857,9 @@ gum_stalker_init (GumStalker * self)
   self->probe_array_by_address = g_hash_table_new_full (NULL, NULL, NULL,
       (GDestroyNotify) g_ptr_array_unref);
 
-  /* Create memory pool (use pool_size property, default 200MB if not set) */
-  if (self->pool_size == 0)
-  {
-    self->pool_size = 200 * 1024 * 1024;
-    g_info ("gum_stalker_init: pool_size was 0, using default 200MB");
-  }
-  else
-  {
-    g_info ("gum_stalker_init: creating memory pool with size %zu bytes (%.1f MB)",
-        self->pool_size, (double)self->pool_size / (1024 * 1024));
-  }
-
-  self->memory_pool = gum_stalker_memory_pool_new (self->pool_size);
-  if (self->memory_pool == NULL)
-    g_error ("Failed to create stalker memory pool");
+  /* Memory pool will be created in constructed callback after all properties are set */
+  self->memory_pool = NULL;
+  g_info ("gum_stalker_init: deferring memory pool creation until properties are set");
 
   page_size = gum_query_page_size ();
 
@@ -1114,6 +1104,30 @@ gum_stalker_dispose (GObject * object)
   }
 
   G_OBJECT_CLASS (gum_stalker_parent_class)->dispose (object);
+}
+
+static void
+gum_stalker_constructed (GObject * object)
+{
+  GumStalker * self = GUM_STALKER (object);
+
+  /* Create memory pool after all properties have been set */
+  if (self->pool_size == 0)
+  {
+    self->pool_size = 200 * 1024 * 1024;
+    g_info ("gum_stalker_constructed: pool_size was 0, using default 200MB");
+  }
+  else
+  {
+    g_info ("gum_stalker_constructed: creating memory pool with size %zu bytes (%.1f MB)",
+        self->pool_size, (double)self->pool_size / (1024 * 1024));
+  }
+
+  self->memory_pool = gum_stalker_memory_pool_new (self->pool_size);
+  if (self->memory_pool == NULL)
+    g_error ("Failed to create stalker memory pool");
+
+  G_OBJECT_CLASS (gum_stalker_parent_class)->constructed (object);
 }
 
 static void
