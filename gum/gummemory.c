@@ -844,49 +844,25 @@ gum_parse_memory_maps_for_address (const gchar * line,
 {
   GumEnsureCodeReadableContext * ctx = user_data;
   GumAddress target = GUM_ADDRESS (ctx->target_address);
-  gchar *endptr;
   GumAddress range_start, range_end;
-  char perms[8];
-  gchar pathname[PATH_MAX];
+  char perms[8] = {0};
+  unsigned long offset, device_major, device_minor, inode;
+  char pathname[PATH_MAX] = {0};
 
   /* Parse: 7b6c7e5000-7b6c7ea000 rwxp 00021000 fe:06 2157 /system/lib64/lib.so */
-  range_start = strtoull (line, &endptr, 16);
-  if (*endptr != '-')
+  int items = sscanf (line, "%lx-%lx %7s %lx %lx:%lx %lu %s",
+                      &range_start, &range_end, perms,
+                      &offset, &device_major, &device_minor, &inode,
+                      pathname);
+
+  if (items < 7)  /* At least the first 7 fields should be present */
     return TRUE; /* Skip invalid lines */
-
-  range_end = strtoull (endptr + 1, &endptr, 16);
-  if (*endptr != ' ')
-    return TRUE;
-
-  /* Parse permissions */
-  if (*endptr != ' ')
-    return TRUE;
-  endptr++; /* Skip space */
-  strncpy (perms, endptr, 7);
-  perms[7] = '\0';
-  endptr += 7;
 
   /* Check if our target address is in this range */
   if (target >= range_start && target < range_end)
   {
-    /* Check if file-backed (skip device numbers, zero inode) */
-    while (*endptr == ' ')
-      endptr++;
-
     ctx->has_execute_permission = (strchr (perms, 'x') != NULL);
-    ctx->is_file_backed = FALSE;
-
-    /* Check if there's a pathname (skip device and inode) */
-    if (*endptr != '\0')
-    {
-      char *slash = strchr (endptr + 1, '/');
-      if (slash != NULL)
-      {
-        strcpy (pathname, slash + 1);
-        if (strlen (pathname) > 0)
-          ctx->is_file_backed = TRUE;
-      }
-    }
+    ctx->is_file_backed = (items >= 8 && strlen (pathname) > 0);
 
     ctx->found = TRUE;
     return FALSE; /* Stop after finding our target */
