@@ -2877,7 +2877,11 @@ gum_exec_ctx_compile_block (GumExecCtx * ctx,
 
   gum_arm64_relocator_reset (rl, input_code, cw);
 
-  gum_ensure_code_readable (input_code, ctx->stalker->page_size);
+  /* Skip gum_ensure_code_readable for excluded ranges */
+  if (!gum_stalker_is_excluding (ctx->stalker, input_code))
+  {
+    gum_ensure_code_readable (input_code, ctx->stalker->page_size);
+  }
 
   gc.instruction = NULL;
   gc.relocator = rl;
