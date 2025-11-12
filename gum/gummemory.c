@@ -259,9 +259,6 @@ gum_memory_patch_code (gpointer address,
 
     protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
 
-    /* Only log RWX calls to help identify the source of RWX memory pages */
-    if (protection == GUM_PAGE_RWX)
-      g_info ("gum_memory_patch_code: calling mprotect on %p (size %zu) with protection RWX for code patching", start_page, range_size);
     if (!gum_try_mprotect (start_page, range_size, protection))
       return FALSE;
 
@@ -842,23 +839,84 @@ typedef struct _GumEnsureCodeReadableContext {
 } GumEnsureCodeReadableContext;
 
 static gboolean
-gum_check_if_range_is_file_backed (const GumRangeDetails * details,
-                                   gpointer user_data)
+gum_parse_memory_maps_for_address (const gchar * line,
+                                      gpointer user_data)
 {
   GumEnsureCodeReadableContext * ctx = user_data;
   GumAddress target = GUM_ADDRESS (ctx->target_address);
-  GumAddress range_start = details->range->base_address;
-  GumAddress range_end = range_start + details->range->size;
+  gchar *endptr;
+  GumAddress range_start, range_end;
+  char perms[8];
+  gchar pathname[PATH_MAX];
 
+  /* Parse: 7b6c7e5000-7b6c7ea000 rwxp 00021000 fe:06 2157 /system/lib64/lib.so */
+  range_start = strtoull (line, &endptr, 16);
+  if (*endptr != '-')
+    return TRUE; /* Skip invalid lines */
+
+  range_end = strtoull (endptr + 1, &endptr, 16);
+  if (*endptr != ' ')
+    return TRUE;
+
+  /* Parse permissions */
+  if (*endptr != ' ')
+    return TRUE;
+  endptr++; /* Skip space */
+  strncpy (perms, endptr, 7);
+  perms[7] = '\0';
+  endptr += 7;
+
+  /* Check if our target address is in this range */
   if (target >= range_start && target < range_end)
   {
-    ctx->is_file_backed = (details->file != NULL) && (details->file->path != NULL);
-    ctx->has_execute_permission = (details->protection & GUM_PAGE_EXECUTE) != 0;
+    /* Check if file-backed (skip device numbers, zero inode) */
+    while (*endptr == ' ')
+      endptr++;
+
+    ctx->has_execute_permission = (strchr (perms, 'x') != NULL);
+    ctx->is_file_backed = FALSE;
+
+    /* Check if there's a pathname (skip device and inode) */
+    if (*endptr != '\0')
+    {
+      char *slash = strchr (endptr + 1, '/');
+      if (slash != NULL)
+      {
+        strcpy (pathname, slash + 1);
+        if (strlen (pathname) > 0)
+          ctx->is_file_backed = TRUE;
+      }
+    }
+
     ctx->found = TRUE;
-    return TRUE; /* Stop enumeration once we found our target */
+    return FALSE; /* Stop after finding our target */
   }
 
-  return FALSE; /* Continue enumeration */
+  return TRUE; /* Continue processing */
+}
+
+static void
+gum_check_memory_properties_from_maps (gconstpointer address,
+                                       GumEnsureCodeReadableContext * ctx)
+{
+  FILE * maps;
+  gchar line[1024];
+
+  ctx->is_file_backed = FALSE;
+  ctx->has_execute_permission = FALSE;
+  ctx->found = FALSE;
+
+  maps = fopen ("/proc/self/maps", "r");
+  if (maps == NULL)
+    return;
+
+  while (fgets (line, sizeof (line), maps) != NULL)
+  {
+    if (!gum_parse_memory_maps_for_address (line, ctx))
+      break;
+  }
+
+  fclose (maps);
 }
 
 #endif /* HAVE_ANDROID */
@@ -895,13 +953,12 @@ gum_ensure_code_readable (gconstpointer address,
       GumEnsureCodeReadableContext ctx;
       gboolean should_modify = TRUE;
 
-      /* Check page properties in a single enumeration */
+      /* Check page properties using custom maps parsing */
       ctx.target_address = cur_page;
       ctx.is_file_backed = FALSE;
       ctx.has_execute_permission = FALSE;
       ctx.found = FALSE;
-      gum_process_enumerate_ranges (GUM_PAGE_NO_ACCESS,
-          gum_check_if_range_is_file_backed, &ctx);
+      gum_check_memory_properties_from_maps (cur_page, &ctx);
 
       /* Skip if page is file-backed (system libraries, etc.) */
       if (ctx.is_file_backed)
@@ -945,10 +1002,7 @@ gum_mprotect (gpointer address,
 {
   gboolean success;
 
-  /* Only log RWX calls to help identify the source of RWX memory pages */
-  if (prot == GUM_PAGE_RWX)
-    g_info ("gum_mprotect: calling mprotect on %p (size %zu) with prot=RWX", address, size);
-  success = gum_try_mprotect (address, size, prot);
+    success = gum_try_mprotect (address, size, prot);
   if (!success)
     g_abort ();
 }
