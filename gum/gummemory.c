@@ -259,8 +259,9 @@ gum_memory_patch_code (gpointer address,
 
     protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
 
-    g_info ("gum_memory_patch_code: calling mprotect on %p (size %zu) with protection %s for code patching",
-        start_page, range_size, (protection == GUM_PAGE_RWX) ? "GUM_PAGE_RWX" : "GUM_PAGE_RW");
+    /* Only log RWX calls to help identify the source of RWX memory pages */
+    if (protection == GUM_PAGE_RWX)
+      g_info ("gum_memory_patch_code: calling mprotect on %p (size %zu) with protection RWX for code patching", start_page, range_size);
     if (!gum_try_mprotect (start_page, range_size, protection))
       return FALSE;
 
@@ -916,17 +917,10 @@ gum_ensure_code_readable (gconstpointer address,
       if (should_modify)
       {
         /* Only modify protection if page is not file-backed and doesn't have execute permission */
-        g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - this is anonymous memory without execute permission",
+        g_info ("gum_ensure_code_readable: calling mprotect on page %p (size %zu) - anonymous memory without execute permission",
             cur_page, page_size);
         if (gum_try_mprotect ((gpointer) cur_page, page_size, GUM_PAGE_RWX))
-        {
           g_hash_table_add (gum_softened_code_pages, (gpointer) cur_page);
-          g_info ("gum_ensure_code_readable: mprotect succeeded on page %p", cur_page);
-        }
-        else
-        {
-          g_info ("gum_ensure_code_readable: mprotect failed on page %p", cur_page);
-        }
       }
       else
       {
@@ -951,16 +945,12 @@ gum_mprotect (gpointer address,
 {
   gboolean success;
 
-  g_info ("gum_mprotect: calling mprotect on %p (size %zu) with prot=%s",
-      address, size,
-      (prot & GUM_PAGE_READ ? "R" : "") |
-      (prot & GUM_PAGE_WRITE ? "W" : "") |
-      (prot & GUM_PAGE_EXECUTE ? "X" : ""));
+  /* Only log RWX calls to help identify the source of RWX memory pages */
+  if (prot == GUM_PAGE_RWX)
+    g_info ("gum_mprotect: calling mprotect on %p (size %zu) with prot=RWX", address, size);
   success = gum_try_mprotect (address, size, prot);
   if (!success)
     g_abort ();
-  else
-    g_info ("gum_mprotect: succeeded on %p (size %zu)", address, size);
 }
 
 #ifndef GUM_USE_SYSTEM_ALLOC
