@@ -898,7 +898,9 @@ gum_stalker_init (GumStalker * self)
 
   self->page_size = page_size;
   self->cpu_features = gum_query_cpu_features ();
-  self->is_rwx_supported = gum_query_rwx_support () != GUM_RWX_NONE;
+  /* Original code: self->is_rwx_supported = gum_query_rwx_support () != GUM_RWX_NONE; */
+  /* Force non-RWX mode for better security even on systems that support it */
+  self->is_rwx_supported = FALSE;
 
   g_mutex_init (&self->mutex);
   self->contexts = NULL;
