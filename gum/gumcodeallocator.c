@@ -220,6 +220,7 @@ gum_code_allocator_commit (GumCodeAllocator * self)
     }
     else
     {
+      g_info ("gum_code_allocator_commit: calling mprotect on %p (size %zu) with GUM_PAGE_RX", pages->data, pages->size);
       gum_mprotect (pages->data, pages->size, GUM_PAGE_RX);
     }
   }

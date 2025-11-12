@@ -2198,7 +2198,10 @@ gum_stalker_thaw (GumStalker * self,
     return;
 
   if (!self->is_rwx_supported)
+  {
+    g_info ("gum_exec_ctx_make_code_writable: calling mprotect on %p (size %zu) with GUM_PAGE_RW", code, size);
     gum_mprotect (code, size, GUM_PAGE_RW);
+  }
 }
 
 static void

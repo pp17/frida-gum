@@ -259,6 +259,8 @@ gum_memory_patch_code (gpointer address,
 
     protection = rwx_supported ? GUM_PAGE_RWX : GUM_PAGE_RW;
 
+    g_info ("gum_memory_patch_code: calling mprotect on %p (size %zu) with protection %s for code patching",
+        start_page, range_size, (protection == GUM_PAGE_RWX) ? "GUM_PAGE_RWX" : "GUM_PAGE_RW");
     if (!gum_try_mprotect (start_page, range_size, protection))
       return FALSE;
 
@@ -949,9 +951,13 @@ gum_mprotect (gpointer address,
 {
   gboolean success;
 
+  g_info ("gum_mprotect: calling mprotect on %p (size %zu) with prot=%s",
+      address, size, gum_page_protection_to_string (prot));
   success = gum_try_mprotect (address, size, prot);
   if (!success)
     g_abort ();
+  else
+    g_info ("gum_mprotect: succeeded on %p (size %zu)", address, size);
 }
 
 #ifndef GUM_USE_SYSTEM_ALLOC
